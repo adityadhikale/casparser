@@ -16,6 +16,7 @@ import sys
 from pathlib import Path
 
 import casparser
+from advisory import format_indian_number
 from excel_exporter import (
     build_export_data,
     write_formatted_csv,
@@ -64,10 +65,17 @@ def process_file(pdf_file: Path, password: str = "", out_dir: Path = OUTPUT_DIR)
         print(f"Investor Name    : {investor.get('name')}")
         print(f"PAN              : {export_data['investor_table'][6][1]}")
         print(
-            f"Demat Holdings   : {len(export_data['demat_rows'])} items (₹{totals['demat_value']})"
+            f"Demat Holdings   : {len(export_data['demat_rows'])} items"
+            f" ({format_indian_number(totals['demat_value'], prefix='₹')})"
         )
-        print(f"Mutual Funds     : {len(export_data['mf_rows'])} schemes (₹{totals['mf_value']})")
-        print(f"Total Valuation  : ₹{totals['total_portfolio_value']}")
+        print(
+            f"Mutual Funds     : {len(export_data['mf_rows'])} schemes"
+            f" ({format_indian_number(totals['mf_value'], prefix='₹')})"
+        )
+        print(
+            "Total Valuation  :"
+            f" {format_indian_number(totals['total_portfolio_value'], prefix='₹')}"
+        )
         print("----------------------")
 
         return True

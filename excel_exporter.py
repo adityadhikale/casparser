@@ -30,9 +30,35 @@ from openpyxl.styles import Alignment, Border, Font, PatternFill, Side
 from openpyxl.utils import get_column_letter
 
 try:
-    from advisory import AdvisoryEngine
+    from advisory import AdvisoryEngine, format_indian_number
 except ImportError:
     AdvisoryEngine = None
+
+    def format_indian_number(val, prefix="", decimals=2):
+        return f"{prefix}{val}"
+
+
+INR_CURRENCY_FORMAT = r"[>=10000000]₹##\,##\,##\,##0.00;[>=100000]₹##\,##\,##0.00;₹#,##0.00"
+INR_NUMBER_FORMAT = r"[>=10000000]##\,##\,##\,##0.00;[>=100000]##\,##\,##0.00;#,##0.00"
+INR_UNITS_FORMAT = r"[>=10000000]##\,##\,##\,##0.000;[>=100000]##\,##\,##0.000;#,##0.000"
+
+
+def style_view_cell(cell):
+    """Applies color badges to advisory view cells."""
+    view_val = str(cell.value or "").upper()
+    if "BUY" in view_val or "ADD" in view_val:
+        cell.fill = PatternFill(start_color="C6EFCE", end_color="C6EFCE", fill_type="solid")
+        cell.font = Font(name="Calibri", size=11, bold=True, color="006100")
+    elif "SELL" in view_val or "TRIM" in view_val:
+        cell.fill = PatternFill(start_color="FFC7CE", end_color="FFC7CE", fill_type="solid")
+        cell.font = Font(name="Calibri", size=11, bold=True, color="9C0006")
+    elif "HOLD" in view_val:
+        cell.fill = PatternFill(start_color="FFEB9C", end_color="FFEB9C", fill_type="solid")
+        cell.font = Font(name="Calibri", size=11, bold=True, color="9C6500")
+    else:
+        cell.fill = PatternFill(start_color="F2F2F2", end_color="F2F2F2", fill_type="solid")
+        cell.font = Font(name="Calibri", size=11, italic=True, color="595959")
+
 
 KNOWN_AMCS = [
     ("Axis", "Axis"),
@@ -451,6 +477,19 @@ def build_export_data(parsed: dict, pdf_path: Optional[Path] = None) -> dict:
         try:
             advisory_engine = AdvisoryEngine()
             advisory_data = advisory_engine.evaluate_holdings(demat_rows)
+            # Directly enrich demat_rows with advisory view and matched info
+            eval_map = {h.get("isin", "").upper(): h for h in advisory_data.get("holdings", [])}
+            for d_row in demat_rows:
+                isin_key = d_row.get("isin", "").upper()
+                matched = eval_map.get(isin_key)
+                if matched:
+                    d_row["advisory_view"] = matched.get("advisory_view", "Not Covered")
+                    d_row["advisory_ticker"] = matched.get("advisory_ticker", "N/A")
+                    d_row["advisory_stock_name"] = matched.get("advisory_stock_name", "N/A")
+                else:
+                    d_row["advisory_view"] = "Not Covered"
+                    d_row["advisory_ticker"] = "N/A"
+                    d_row["advisory_stock_name"] = "N/A"
         except Exception as e:
             print(f"Notice: Advisory cross-reference skipped: {e}")
 
@@ -603,7 +642,9 @@ def auto_fit_columns(ws, min_width=12, max_width=45):
 
 
 def write_formatted_excel(export_data: dict, output_path: Path):
-    """Generates an Excel workbook with both combined and individual sheets."""
+    """Generates an Excel workbook with both combined and individual sheets.
+    Applies Indian number formatting (Lakhs and Crores) and prominent color-coded Advisory Views.
+    """
     wb = openpyxl.Workbook()
 
     ws_all = wb.active
@@ -632,7 +673,27 @@ def write_formatted_excel(export_data: dict, output_path: Path):
                         val = float(val) if "." in val else int(val)
                 except ValueError:
                     pass
-                ws_all.cell(row=current_row, column=c_idx, value=val)
+                cell = ws_all.cell(row=current_row, column=c_idx, value=val)
+
+                if headers and c_idx <= len(headers):
+                    h_name = headers[c_idx - 1].lower()
+                    if h_name in (
+                        "value",
+                        "amount",
+                        "nav",
+                        "cost",
+                        "gain_absolute",
+                        "info_investment_value",
+                        "txn_price",
+                    ):
+                        if isinstance(val, (int, float)):
+                            cell.number_format = INR_CURRENCY_FORMAT
+                    elif h_name in ("units", "balance", "info_close_units", "info_open_units"):
+                        if isinstance(val, (int, float)):
+                            cell.number_format = INR_UNITS_FORMAT
+                    elif h_name == "advisory_view":
+                        style_view_cell(cell)
+
             current_row += 1
 
     append_section(["Field", "Value"], export_data["investor_table"][1:], header_color="2F5597")
@@ -699,6 +760,9 @@ def write_formatted_excel(export_data: dict, output_path: Path):
         "name",
         "units",
         "value",
+        "advisory_view",
+        "advisory_ticker",
+        "advisory_stock_name",
     ]
     demat_data = [[r.get(h, "") for h in demat_headers] for r in export_data["demat_rows"]]
     append_section(demat_headers, demat_data, header_color="1F497D")
@@ -706,14 +770,7 @@ def write_formatted_excel(export_data: dict, output_path: Path):
 
     auto_fit_columns(ws_all)
 
-    ws_demat = wb.create_sheet(title="Demat Holdings")
-    ws_demat.append(demat_headers)
-    style_table_header(ws_demat, 1, len(demat_headers), fill_color="1F497D")
-    for r in demat_data:
-        ws_demat.append([clean_excel_value(v) for v in r])
-    auto_fit_columns(ws_demat)
-
-    # Sheet: Equity Advisory (Cross-referenced with Equity Portfolio Advisory)
+    # Sheet 2: Equity Advisory (Dedicated Portfolio Advisory Dashboard)
     advisory_res = export_data.get("advisory_data") or {}
     advisory_holdings = advisory_res.get("holdings") or []
     if advisory_holdings:
@@ -743,13 +800,21 @@ def write_formatted_excel(export_data: dict, output_path: Path):
                 advisory_res.get("total_equities_count", len(advisory_holdings)),
             ]
         )
-        ws_adv.append(["Total Equity Valuation", float(advisory_res.get("total_equity_value", 0))])
+
+        tot_val_float = float(advisory_res.get("total_equity_value", 0))
+        ws_adv.append(["Total Equity Valuation", tot_val_float])
+        ws_adv.cell(row=ws_adv.max_row, column=2).number_format = INR_CURRENCY_FORMAT
 
         for action in ["BUY", "HOLD", "SELL", "ADD", "TRIM", "Not Covered"]:
             cnt = summary.get(action, {}).get("count", 0)
             val = summary.get(action, {}).get("value", 0)
             if cnt > 0:
-                ws_adv.append([f"Recommendation: {action}", f"{cnt} stocks (₹{float(val):,.2f})"])
+                ws_adv.append(
+                    [
+                        f"Recommendation: {action}",
+                        f"{cnt} stocks ({format_indian_number(val, prefix='₹')})",
+                    ]
+                )
 
         ws_adv.append([])
 
@@ -779,39 +844,55 @@ def write_formatted_excel(export_data: dict, output_path: Path):
             ws_adv.append(row_vals)
             curr_row = ws_adv.max_row
 
-            ws_adv.cell(row=curr_row, column=6).number_format = "#,##0.000"
-            ws_adv.cell(row=curr_row, column=7).number_format = "₹#,##0.00"
-
-            v_cell = ws_adv.cell(row=curr_row, column=view_col)
-            view_val = str(v_cell.value or "").upper()
-            if "BUY" in view_val or "ADD" in view_val:
-                v_cell.fill = PatternFill(
-                    start_color="C6EFCE", end_color="C6EFCE", fill_type="solid"
-                )
-                v_cell.font = Font(name="Calibri", size=11, bold=True, color="006100")
-            elif "SELL" in view_val or "TRIM" in view_val:
-                v_cell.fill = PatternFill(
-                    start_color="FFC7CE", end_color="FFC7CE", fill_type="solid"
-                )
-                v_cell.font = Font(name="Calibri", size=11, bold=True, color="9C0006")
-            elif "HOLD" in view_val:
-                v_cell.fill = PatternFill(
-                    start_color="FFEB9C", end_color="FFEB9C", fill_type="solid"
-                )
-                v_cell.font = Font(name="Calibri", size=11, bold=True, color="9C6500")
-            else:
-                v_cell.fill = PatternFill(
-                    start_color="F2F2F2", end_color="F2F2F2", fill_type="solid"
-                )
-                v_cell.font = Font(name="Calibri", size=11, italic=True, color="595959")
+            ws_adv.cell(row=curr_row, column=6).number_format = INR_UNITS_FORMAT
+            ws_adv.cell(row=curr_row, column=7).number_format = INR_CURRENCY_FORMAT
+            style_view_cell(ws_adv.cell(row=curr_row, column=view_col))
 
         auto_fit_columns(ws_adv)
 
+    # Sheet 3: Demat Holdings
+    ws_demat = wb.create_sheet(title="Demat Holdings")
+    ws_demat.append(demat_headers)
+    style_table_header(ws_demat, 1, len(demat_headers), fill_color="1F497D")
+    d_view_col = demat_headers.index("advisory_view") + 1
+    for r in demat_data:
+        row_clean = []
+        for v in r:
+            v = clean_excel_value(v)
+            try:
+                if isinstance(v, str) and v and re.match(r"^-?\d+(\.\d+)?$", v):
+                    v = float(v) if "." in v else int(v)
+            except ValueError:
+                pass
+            row_clean.append(v)
+        ws_demat.append(row_clean)
+        curr_r = ws_demat.max_row
+        ws_demat.cell(row=curr_r, column=9).number_format = INR_UNITS_FORMAT
+        ws_demat.cell(row=curr_r, column=10).number_format = INR_CURRENCY_FORMAT
+        style_view_cell(ws_demat.cell(row=curr_r, column=d_view_col))
+    auto_fit_columns(ws_demat)
+
+    # Sheet 4: Mutual Funds
     ws_mf = wb.create_sheet(title="Mutual Funds")
     ws_mf.append(mf_headers)
     style_table_header(ws_mf, 1, len(mf_headers), fill_color="203764")
     for r in mf_data:
-        ws_mf.append([clean_excel_value(v) for v in r])
+        row_clean = []
+        for v in r:
+            v = clean_excel_value(v)
+            try:
+                if isinstance(v, str) and v and re.match(r"^-?\d+(\.\d+)?$", v):
+                    v = float(v) if "." in v else int(v)
+            except ValueError:
+                pass
+            row_clean.append(v)
+        ws_mf.append(row_clean)
+        curr_r = ws_mf.max_row
+        ws_mf.cell(row=curr_r, column=7).number_format = INR_UNITS_FORMAT
+        ws_mf.cell(row=curr_r, column=8).number_format = INR_CURRENCY_FORMAT
+        ws_mf.cell(row=curr_r, column=9).number_format = INR_CURRENCY_FORMAT
+        ws_mf.cell(row=curr_r, column=10).number_format = INR_CURRENCY_FORMAT
+        ws_mf.cell(row=curr_r, column=11).number_format = INR_CURRENCY_FORMAT
     auto_fit_columns(ws_mf)
 
     if txn_data:
@@ -819,9 +900,24 @@ def write_formatted_excel(export_data: dict, output_path: Path):
         ws_txn.append(txn_headers)
         style_table_header(ws_txn, 1, len(txn_headers), fill_color="2F5597")
         for r in txn_data:
-            ws_txn.append([clean_excel_value(v) for v in r])
+            row_clean = []
+            for v in r:
+                v = clean_excel_value(v)
+                try:
+                    if isinstance(val, str) and v and re.match(r"^-?\d+(\.\d+)?$", v):
+                        v = float(v) if "." in v else int(v)
+                except ValueError:
+                    pass
+                row_clean.append(v)
+            ws_txn.append(row_clean)
+            curr_r = ws_txn.max_row
+            ws_txn.cell(row=curr_r, column=8).number_format = INR_CURRENCY_FORMAT
+            ws_txn.cell(row=curr_r, column=9).number_format = INR_UNITS_FORMAT
+            ws_txn.cell(row=curr_r, column=10).number_format = INR_CURRENCY_FORMAT
+            ws_txn.cell(row=curr_r, column=11).number_format = INR_UNITS_FORMAT
         auto_fit_columns(ws_txn)
 
+    # Sheet 6: Investor & Summary
     ws_sum = wb.create_sheet(title="Investor & Summary")
     ws_sum.append(["INVESTOR INFORMATION", ""])
     style_table_header(ws_sum, 1, 2, fill_color="1F497D")
@@ -833,7 +929,15 @@ def write_formatted_excel(export_data: dict, output_path: Path):
     ws_sum.append(export_data["category_table"][0])
     style_table_header(ws_sum, start_r, 3, fill_color="2F5597")
     for row in export_data["category_table"][1:]:
-        ws_sum.append([clean_excel_value(v) for v in row])
+        cat_name, cat_val, cat_cnt = row[0], row[1], row[2]
+        try:
+            val_f = float(cat_val)
+        except (ValueError, TypeError):
+            val_f = cat_val
+        ws_sum.append([cat_name, val_f, cat_cnt])
+        curr_r = ws_sum.max_row
+        if isinstance(val_f, (int, float)):
+            ws_sum.cell(row=curr_r, column=2).number_format = INR_CURRENCY_FORMAT
 
     ws_sum.append([])
     start_m = ws_sum.max_row + 1

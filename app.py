@@ -14,7 +14,7 @@ import pandas as pd
 import streamlit as st
 
 import casparser
-from advisory import DEFAULT_ADVISORY_PATH, AdvisoryEngine
+from advisory import DEFAULT_ADVISORY_PATH, AdvisoryEngine, format_indian_number
 from excel_exporter import (
     build_export_data,
     write_formatted_csv,
@@ -247,20 +247,23 @@ def main():
             f"✅ Statement parsed successfully! {f'Period: {period_str}' if period_str else ''}"
         )
 
-        # Top KPI Metrics Cards
+        # Top KPI Metrics Cards (Indian Numbering System)
         m1, m2, m3, m4 = st.columns(4)
         with m1:
-            st.metric("Total Portfolio Value", f"₹{float(totals['total_portfolio_value']):,.2f}")
+            st.metric(
+                "Total Portfolio Value",
+                format_indian_number(totals["total_portfolio_value"], prefix="₹"),
+            )
         with m2:
             st.metric(
                 "Demat Holdings",
-                f"₹{float(totals['demat_value']):,.2f}",
+                format_indian_number(totals["demat_value"], prefix="₹"),
                 f"{len(export_data['demat_rows'])} items",
             )
         with m3:
             st.metric(
                 "Mutual Funds",
-                f"₹{float(totals['mf_value']):,.2f}",
+                format_indian_number(totals["mf_value"], prefix="₹"),
                 f"{len(export_data['mf_rows'])} schemes",
             )
         with m4:
@@ -334,8 +337,9 @@ def main():
                     with s_cols[idx]:
                         cnt = summary.get(act, {}).get("count", 0)
                         val = summary.get(act, {}).get("value", 0)
+                        formatted_val = format_indian_number(val, prefix="₹")
                         st.markdown(
-                            f"**{emoji} {act}**<br><span style='font-size:1.3rem;font-weight:700'>{cnt}</span> stocks<br><span style='font-size:0.85rem;color:#6B7280'>₹{float(val):,.2f}</span>",
+                            f"**{emoji} {act}**<br><span style='font-size:1.3rem;font-weight:700'>{cnt}</span> stocks<br><span style='font-size:0.85rem;color:#6B7280'>{formatted_val}</span>",
                             unsafe_allow_html=True,
                         )
 
@@ -354,7 +358,7 @@ def main():
                     else adv_df[adv_df["advisory_view"] == filter_choice]
                 )
 
-                # Format columns for display
+                # Format columns for display (Indian Numbering System)
                 display_df = filtered_df[
                     [
                         "demat_stock_name",
@@ -378,7 +382,10 @@ def main():
                     "Match Basis",
                 ]
                 display_df["Value (₹)"] = display_df["Value (₹)"].apply(
-                    lambda x: f"₹{float(x):,.2f}" if x else "₹0.00"
+                    lambda x: format_indian_number(x, prefix="₹")
+                )
+                display_df["Units"] = display_df["Units"].apply(
+                    lambda x: format_indian_number(x, prefix="", decimals=3)
                 )
 
                 st.dataframe(
@@ -394,21 +401,42 @@ def main():
             st.subheader("🏢 Demat Equities & Bonds")
             if export_data["demat_rows"]:
                 demat_df = pd.DataFrame(export_data["demat_rows"])
-                demat_display = demat_df[
-                    ["name", "category", "units", "value", "isin", "dp_name", "bo_id"]
-                ].copy()
-                demat_display.columns = [
-                    "Security Name",
-                    "Category",
-                    "Units",
-                    "Value (₹)",
-                    "ISIN",
-                    "DP Name",
-                    "BO ID",
+                demat_cols = [
+                    c
+                    for c in [
+                        "name",
+                        "advisory_view",
+                        "advisory_ticker",
+                        "units",
+                        "value",
+                        "category",
+                        "isin",
+                        "dp_name",
+                        "bo_id",
+                    ]
+                    if c in demat_df.columns
                 ]
-                demat_display["Value (₹)"] = demat_display["Value (₹)"].apply(
-                    lambda x: f"₹{float(x):,.2f}" if x else "₹0.00"
-                )
+                demat_display = demat_df[demat_cols].copy()
+                if "value" in demat_display:
+                    demat_display["value"] = demat_display["value"].apply(
+                        lambda x: format_indian_number(x, prefix="₹")
+                    )
+                if "units" in demat_display:
+                    demat_display["units"] = demat_display["units"].apply(
+                        lambda x: format_indian_number(x, prefix="", decimals=3)
+                    )
+                col_rename = {
+                    "name": "Security Name",
+                    "advisory_view": "Advisory View",
+                    "advisory_ticker": "Ticker",
+                    "units": "Units",
+                    "value": "Value (₹)",
+                    "category": "Category",
+                    "isin": "ISIN",
+                    "dp_name": "DP Name",
+                    "bo_id": "BO ID",
+                }
+                demat_display.rename(columns=col_rename, inplace=True)
                 st.dataframe(demat_display, use_container_width=True, height=400)
             else:
                 st.info("No Demat holdings present in this statement.")
@@ -429,9 +457,22 @@ def main():
                 ]
                 existing_cols = [c for c in cols_to_show if c in mf_df.columns]
                 mf_display = mf_df[existing_cols].copy()
-                mf_display["value"] = mf_display["value"].apply(
-                    lambda x: f"₹{float(x):,.2f}" if x else "₹0.00"
-                )
+                if "value" in mf_display:
+                    mf_display["value"] = mf_display["value"].apply(
+                        lambda x: format_indian_number(x, prefix="₹")
+                    )
+                if "cost" in mf_display:
+                    mf_display["cost"] = mf_display["cost"].apply(
+                        lambda x: format_indian_number(x, prefix="₹")
+                    )
+                if "nav" in mf_display:
+                    mf_display["nav"] = mf_display["nav"].apply(
+                        lambda x: format_indian_number(x, prefix="₹")
+                    )
+                if "units" in mf_display:
+                    mf_display["units"] = mf_display["units"].apply(
+                        lambda x: format_indian_number(x, prefix="", decimals=3)
+                    )
                 st.dataframe(mf_display, use_container_width=True, height=400)
             else:
                 st.info("No Mutual Fund holdings present in this statement.")
@@ -440,7 +481,23 @@ def main():
         with tab_txn:
             st.subheader("📝 Transactions")
             if export_data["txn_rows"]:
-                txn_df = pd.DataFrame(export_data["txn_rows"])
+                txn_df = pd.DataFrame(export_data["txn_rows"]).copy()
+                if "amount" in txn_df:
+                    txn_df["amount"] = txn_df["amount"].apply(
+                        lambda x: format_indian_number(x, prefix="₹")
+                    )
+                if "nav" in txn_df:
+                    txn_df["nav"] = txn_df["nav"].apply(
+                        lambda x: format_indian_number(x, prefix="₹")
+                    )
+                if "units" in txn_df:
+                    txn_df["units"] = txn_df["units"].apply(
+                        lambda x: format_indian_number(x, prefix="", decimals=3)
+                    )
+                if "balance" in txn_df:
+                    txn_df["balance"] = txn_df["balance"].apply(
+                        lambda x: format_indian_number(x, prefix="", decimals=3)
+                    )
                 st.dataframe(txn_df, use_container_width=True, height=400)
             else:
                 st.info("No transactions recorded in this statement period.")
@@ -455,10 +512,11 @@ def main():
             with col_c:
                 st.subheader("Portfolio Breakdown")
                 cat_df = pd.DataFrame(
-                    export_data["category_table"][1:], columns=["Category", "Value (₹)", "Count"]
+                    export_data["category_table"][1:],
+                    columns=["Category", "Value (₹)", "Count"],
                 )
                 cat_df["Value (₹)"] = cat_df["Value (₹)"].apply(
-                    lambda x: f"₹{float(x):,.2f}" if x else "₹0.00"
+                    lambda x: format_indian_number(x, prefix="₹")
                 )
                 st.table(cat_df)
 

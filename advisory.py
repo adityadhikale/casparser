@@ -16,6 +16,42 @@ BASE_DIR = Path(__file__).resolve().parent
 DEFAULT_ADVISORY_PATH = BASE_DIR / "data" / "Equity Portfolio Advisory.xlsx"
 
 
+def format_indian_number(val: Any, prefix: str = "", decimals: int = 2) -> str:
+    """Formats a number in Indian numbering system (Lakhs and Crores).
+    e.g. 275573.41 -> 2,75,573.41, 10000000 -> 1,00,00,000.00
+    """
+    if val is None or val == "":
+        return ""
+    try:
+        num = float(val)
+    except (ValueError, TypeError):
+        return str(val)
+
+    is_negative = num < 0
+    num = abs(num)
+
+    fmt_str = f"{num:.{decimals}f}"
+    parts = fmt_str.split(".")
+    integer_part = parts[0]
+    decimal_part = "." + parts[1] if len(parts) > 1 and decimals > 0 else ""
+
+    if len(integer_part) <= 3:
+        result = integer_part
+    else:
+        last3 = integer_part[-3:]
+        rest = integer_part[:-3]
+        groups = []
+        while len(rest) > 2:
+            groups.append(rest[-2:])
+            rest = rest[:-2]
+        if rest:
+            groups.append(rest)
+        result = ",".join(reversed(groups)) + "," + last3
+
+    sign = "-" if is_negative else ""
+    return f"{sign}{prefix}{result}{decimal_part}"
+
+
 def normalize_review(review: Any) -> str:
     """Normalizes raw review strings to standard uppercase categories."""
     if not review or pd.isna(review):
