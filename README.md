@@ -1,0 +1,270 @@
+# CASParser
+
+[![License: MIT](https://img.shields.io/badge/License-MIT-blue.svg)](LICENSE)
+[![Python versions](https://img.shields.io/badge/python-3.11%20%7C%203.12%20%7C%203.13%20%7C%203.14-blue)](https://github.com/adityadhikale/casparser)
+[![Repository](https://img.shields.io/badge/GitHub-adityadhikale%2Fcasparser-black?logo=github)](https://github.com/adityadhikale/casparser)
+
+**CASParser** is a comprehensive Python parser and portfolio analysis toolkit for Consolidated Account Statement (CAS) PDF files issued by **CDSL**, **NSDL**, **CAMS**, and **KFintech**.
+
+It extracts demat equities, mutual fund folios, bonds, NPS accounts, and transactions into structured **Excel (`.xlsx`)**, **CSV**, and **JSON** formats.
+
+---
+
+## Key Features
+
+- **Multi-Source CAS Support**:
+  - **CDSL & NSDL**: Consolidated Demat accounts, equities, mutual fund holdings, corporate/government bonds, and NPS.
+  - **CAMS & KFintech**: Detailed transactions and summary mutual fund folios.
+- **Automated Excel (`.xlsx`) Export**:
+  - **`CAS_Report_Combined` Sheet**: Full multi-section report (Investor Info, Category Summary, Mutual Funds, Transactions, Demat Holdings, Metadata).
+  - **`Demat Holdings` Sheet**: Clean, formatted spreadsheet of all equity shares and bonds.
+  - **`Mutual Funds` Sheet**: Full portfolio breakdown with AMC names, folios, units, NAV, cost, and P&L.
+  - **`Transactions` Sheet**: Chronological SIP and investment transactions with units, NAV, and stamp duty.
+  - **`Investor & Summary` Sheet**: Investor KYC information and asset class totals.
+- **Standard Stacked CSV**: Matches the original multi-section web export format.
+- **OpenXML Sanitization**: Automatic cleanup of non-printable control characters from PDF streams to guarantee error-free Excel generation.
+- **Batch Processing**: Drop PDFs directly into `input/` and get generated reports in `output/`.
+- **Flexible Security**: Automatically parses password-free PDFs and supports password-encrypted statements.
+- **High Performance**: Built on `pypdfium2` for fast native PDF object extraction without external OCR or third-party engines.
+
+---
+
+## Supported Inputs
+
+| Issuer | Variant(s) | Source |
+|---|---|---|
+| **CAMS** | Detailed, Summary | `mailback.camsonline.com` request |
+| **KFintech** | Detailed, Summary | `mfs.kfintech.com` request |
+| **NSDL** | Demat consolidated | NSDL CAS email (monthly) |
+| **CDSL** | Demat consolidated | CDSL CAS email (monthly) |
+
+---
+
+## Directory Structure
+
+```text
+casparser/
+├── input/                  # Place your CAS PDF statements here
+├── output/                 # Generated Excel, CSV, and JSON reports
+├── casparser/              # Core library parser modules
+│   ├── parsers/            # CDSL, NSDL, CAMS, and KFintech parsers
+│   ├── analysis/           # Capital gains and portfolio analytics
+│   └── cli.py              # Command-line interface
+├── excel_exporter.py       # Multi-tab Excel and formatted CSV builder
+├── run_parser.py           # Batch / single-file automated runner
+├── tests/                  # Unit and integration test suites
+└── pyproject.toml          # Project configuration & dependencies
+```
+
+---
+
+## Quickstart
+
+### 1. Installation
+
+Clone the repository and install requirements:
+
+```bash
+git clone https://github.com/adityadhikale/casparser.git
+cd casparser
+python -m venv .venv
+# On Windows:
+.\.venv\Scripts\activate
+# On Linux/macOS:
+source .venv/bin/activate
+
+pip install -e .
+```
+
+### 2. Running the Parser (Automated)
+
+1. Drop your CAS PDF into the `input/` folder.
+2. Run the automated runner:
+
+```bash
+# If your PDF does not have a password:
+python run_parser.py
+
+# If your PDF is password-protected:
+python run_parser.py -p "YOUR_PASSWORD"
+```
+
+All parsed files will be created in `output/`:
+- `<filename>.xlsx` (Formatted multi-tab Excel workbook)
+- `<filename>_formatted.csv` (Multi-section CSV report)
+- `<filename>_parsed.json` (Full raw JSON data)
+
+---
+
+## Usage
+
+```python
+import casparser
+
+# Parse statement to typed Pydantic models (CASData or NSDLCASData)
+data = casparser.read_cas_pdf("input/statement.pdf", password="")
+
+# Get data in JSON format
+json_str = casparser.read_cas_pdf("input/statement.pdf", password="", output="json")
+
+# Get transactions data in CSV format
+csv_str = casparser.read_cas_pdf("input/statement.pdf", password="", output="csv")
+```
+
+---
+
+## Data Structure
+
+`read_cas_pdf` returns a typed Pydantic model — `CASData` for CAMS / KFintech statements, and `NSDLCASData` for NSDL / CDSL demat statements (see `casparser.types`). With `output="json"` the same shape is serialised to a JSON string.
+
+Machine-readable JSON Schema files are generated under `schema/`.
+
+### CAMS / KFintech — `CASData`
+
+```ts
+// decimal = a JSON string holding an exact decimal number, e.g. "4999.75"
+{
+  statement_period: { from: string, to: string },   // "01-Apr-2024"
+  file_type: "CAMS" | "KFINTECH",
+  cas_type: "DETAILED" | "SUMMARY",
+  investor_info: { name: string, email: string, address: string, mobile: string },
+  folios: {
+    folio: string,                       // "12345678 / 90"
+    amc: string,
+    name: string | null,                 // folio holder's name as printed;
+                                         // null on older templates that omit it
+    PAN: string | null,
+    KYC: "OK" | "NOT OK" | null,
+    PANKYC: "OK" | "NOT OK" | null,
+    schemes: {
+      scheme: string,
+      advisor: string | null,            // distributor ARN / RIA code
+      rta_code: string,                  // scheme's per-RTA code
+      rta: string,                       // registrar: "CAMS", "KFINTECH", …
+      type: string | null,               // "EQUITY" | "DEBT" | …
+      isin: string | null,
+      amfi: string | null,
+      nominees: string[],
+      open: decimal,                     // opening unit balance
+      close: decimal,                    // closing unit balance (as printed)
+      close_calculated: decimal,         // open + sum of parsed units
+      valuation: { date: string, nav: decimal, cost: decimal | null, value: decimal },
+      transactions: {
+        date: string,                    // ISO: "2024-04-01"
+        description: string,
+        amount: decimal | null,
+        units: decimal | null,           // null for non-unit rows (taxes)
+        nav: decimal | null,
+        balance: decimal | null,         // running unit balance
+        type: string,                    // see transaction types below
+        dividend_rate: decimal | null,   // DIVIDEND_* rows only
+        gift_folio: string | null,       // GIFT_IN/OUT only: counterparty folio
+      }[],
+    }[],
+  }[],
+  parse_warnings: string[],
+}
+```
+
+### Transaction types
+
+| `type` | Meaning |
+|---|---|
+| `PURCHASE` / `PURCHASE_SIP` | Lump-sum / SIP-instalment purchase |
+| `REDEMPTION` | Redemption / withdrawal |
+| `SWITCH_IN` / `SWITCH_IN_MERGER` | Units received from a switch (or scheme merger) |
+| `SWITCH_OUT` / `SWITCH_OUT_MERGER` | Units moved out via a switch (or scheme merger) |
+| `DIVIDEND_PAYOUT` / `DIVIDEND_REINVEST` | IDCW / dividend rows — these carry `dividend_rate` |
+| `STT_TAX` / `STAMP_DUTY_TAX` / `TDS_TAX` | Tax rows — `amount` only, no units |
+| `SEGREGATION` | Units allotted in a segregated (side-pocketed) portfolio |
+| `GIFT_IN` / `GIFT_OUT` | Units gifted in / out via inter-folio transfer |
+| `REVERSAL` | Reversed / rejected transaction |
+| `MISC` / `UNKNOWN` | Anything that doesn't match the above |
+
+### NSDL / CDSL — `NSDLCASData`
+
+Demat statements return holdings grouped per demat account:
+
+```ts
+{
+  statement_period: { from: string, to: string },
+  file_type: "NSDL" | "CDSL",
+  investor_info: { name: string, email: string, address: string, mobile: string },
+  accounts: {
+    name: string,                        // account / DP name
+    type: string,                        // "NSDL" | "CDSL"
+    dp_id: string | null,
+    client_id: string | null,
+    folios: number,                      // count of MF folios in the account
+    balance: decimal,                    // total account valuation
+    owners: { name: string, PAN: string }[],
+    equities: {
+      isin: string, name: string | null,
+      num_shares: decimal, price: decimal, value: decimal,
+      symbol: string | null, exchange: string | null,   // from the ISIN DB
+    }[],
+    mutual_funds: {
+      isin: string, name: string | null,
+      amfi: string | null, type: string | null,         // from the ISIN DB
+      balance: decimal, nav: decimal, value: decimal,
+      avg_cost: decimal | null, total_cost: decimal | null,
+      ucc: string | null, folio: string | null,
+      pnl: decimal | null, return: decimal | null,
+    }[],
+    bonds: {
+      isin: string, name: string | null,
+      num_bonds: decimal, value: decimal,
+      face_value: decimal | null, coupon_rate: decimal | null,
+      coupon_frequency: string | null, maturity_date: string | null,
+      market_price: decimal | null,
+    }[],
+  }[],
+  parse_warnings: string[],              // non-fatal demat data-quality warnings
+  nps: {                                 // National Pension System, if present (CDSL)
+    pran: string | null,                 // PRAN (as printed; often masked)
+    nps_sp: string | null,               // NPS service provider / CRA, e.g. "PROT"
+    value: decimal,                      // reported NPS portfolio value
+    schemes: {
+      scheme: string, fund_manager: string | null,
+      tier: string | null,               // "I" | "II"
+      asset_class: string | null,        // "E" | "C" | "G" | "A"
+      units: decimal, nav: decimal, value: decimal,
+    }[],
+  } | null,
+}
+```
+
+---
+
+## CLI Usage
+
+The built-in command line interface provides quick terminal summaries and capital gains reports:
+
+```bash
+# Display summary in console:
+casparser path/to/statement.pdf -p "" -s
+
+# Generate Capital Gains report:
+casparser path/to/statement.pdf -p "PASSWORD" -g
+
+# Export Schedule 112A for ITR filing:
+casparser path/to/statement.pdf -p "PASSWORD" --gains-112a ask -o output.csv
+```
+
+---
+
+## Generated Excel Structure
+
+| Sheet Name | Content |
+|---|---|
+| **`CAS_Report_Combined`** | Complete consolidated statement with formatted tables for Investor KYC, Portfolio Summary, Mutual Funds, Transactions, and Demat Holdings. |
+| **`Demat Holdings`** | DP ID, Client ID, BO ID, Company Name, ISIN, Category, Shares, and Closing Value. |
+| **`Mutual Funds`** | Folio Number, AMC Name, Scheme Name, ISIN, Units, NAV, Valuation, Cost, and Absolute/Percentage Gains. |
+| **`Transactions`** | Date, Folio, Scheme, Type (SIP/Purchase), Units, Price, Stamp Duty, and Running Balance. |
+| **`Investor & Summary`** | Name, PAN, Address, Pincode, Statement Dates, and Asset Breakdown. |
+
+---
+
+## License
+
+This project is licensed under the [MIT License](LICENSE).
