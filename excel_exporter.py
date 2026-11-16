@@ -29,6 +29,11 @@ from openpyxl.cell.cell import ILLEGAL_CHARACTERS_RE
 from openpyxl.styles import Alignment, Border, Font, PatternFill, Side
 from openpyxl.utils import get_column_letter
 
+try:
+    from advisory import AdvisoryEngine
+except ImportError:
+    AdvisoryEngine = None
+
 KNOWN_AMCS = [
     ("Axis", "Axis"),
     ("Canara Robeco", "Canara Robeco"),
@@ -441,6 +446,14 @@ def build_export_data(parsed: dict, pdf_path: Optional[Path] = None) -> dict:
 
     total_portfolio_value = total_demat_value + total_mf_value + total_nps_value
 
+    advisory_data = {}
+    if AdvisoryEngine:
+        try:
+            advisory_engine = AdvisoryEngine()
+            advisory_data = advisory_engine.evaluate_holdings(demat_rows)
+        except Exception as e:
+            print(f"Notice: Advisory cross-reference skipped: {e}")
+
     investor_table = [
         ["Field", "Value"],
         ["Address", clean_address],
@@ -475,6 +488,7 @@ def build_export_data(parsed: dict, pdf_path: Optional[Path] = None) -> dict:
         "mf_rows": mf_rows,
         "txn_rows": txn_rows,
         "demat_rows": demat_rows,
+        "advisory_data": advisory_data,
         "metadata_table": metadata_table,
         "totals": {
             "total_portfolio_value": str(total_portfolio_value),
@@ -698,6 +712,100 @@ def write_formatted_excel(export_data: dict, output_path: Path):
     for r in demat_data:
         ws_demat.append([clean_excel_value(v) for v in r])
     auto_fit_columns(ws_demat)
+
+    # Sheet: Equity Advisory (Cross-referenced with Equity Portfolio Advisory)
+    advisory_res = export_data.get("advisory_data") or {}
+    advisory_holdings = advisory_res.get("holdings") or []
+    if advisory_holdings:
+        ws_adv = wb.create_sheet(title="Equity Advisory")
+        adv_headers = [
+            "demat_type",
+            "dp_id",
+            "client_id",
+            "isin",
+            "demat_stock_name",
+            "units",
+            "value",
+            "exchange_symbol",
+            "advisory_ticker",
+            "advisory_stock_name",
+            "advisory_view",
+            "match_status",
+        ]
+
+        ws_adv.append(["PORTFOLIO ADVISORY RECOMMENDATIONS", ""])
+        style_table_header(ws_adv, 1, 2, fill_color="1F497D")
+
+        summary = advisory_res.get("summary", {})
+        ws_adv.append(
+            [
+                "Total Evaluated Equities",
+                advisory_res.get("total_equities_count", len(advisory_holdings)),
+            ]
+        )
+        ws_adv.append(["Total Equity Valuation", float(advisory_res.get("total_equity_value", 0))])
+
+        for action in ["BUY", "HOLD", "SELL", "ADD", "TRIM", "Not Covered"]:
+            cnt = summary.get(action, {}).get("count", 0)
+            val = summary.get(action, {}).get("value", 0)
+            if cnt > 0:
+                ws_adv.append([f"Recommendation: {action}", f"{cnt} stocks (₹{float(val):,.2f})"])
+
+        ws_adv.append([])
+
+        table_start = ws_adv.max_row + 1
+        ws_adv.append(adv_headers)
+        style_table_header(ws_adv, table_start, len(adv_headers), fill_color="2F5597")
+
+        view_col = adv_headers.index("advisory_view") + 1
+
+        for h in advisory_holdings:
+            val_num = float(h.get("value", 0)) if h.get("value") else 0
+            units_num = float(h.get("units", 0)) if h.get("units") else 0
+            row_vals = [
+                h.get("demat_type", ""),
+                h.get("dp_id", ""),
+                h.get("client_id", ""),
+                h.get("isin", ""),
+                clean_excel_value(h.get("demat_stock_name", "")),
+                units_num,
+                val_num,
+                h.get("exchange_symbol", ""),
+                h.get("advisory_ticker", ""),
+                clean_excel_value(h.get("advisory_stock_name", "")),
+                h.get("advisory_view", "Not Covered"),
+                h.get("match_status", ""),
+            ]
+            ws_adv.append(row_vals)
+            curr_row = ws_adv.max_row
+
+            ws_adv.cell(row=curr_row, column=6).number_format = "#,##0.000"
+            ws_adv.cell(row=curr_row, column=7).number_format = "₹#,##0.00"
+
+            v_cell = ws_adv.cell(row=curr_row, column=view_col)
+            view_val = str(v_cell.value or "").upper()
+            if "BUY" in view_val or "ADD" in view_val:
+                v_cell.fill = PatternFill(
+                    start_color="C6EFCE", end_color="C6EFCE", fill_type="solid"
+                )
+                v_cell.font = Font(name="Calibri", size=11, bold=True, color="006100")
+            elif "SELL" in view_val or "TRIM" in view_val:
+                v_cell.fill = PatternFill(
+                    start_color="FFC7CE", end_color="FFC7CE", fill_type="solid"
+                )
+                v_cell.font = Font(name="Calibri", size=11, bold=True, color="9C0006")
+            elif "HOLD" in view_val:
+                v_cell.fill = PatternFill(
+                    start_color="FFEB9C", end_color="FFEB9C", fill_type="solid"
+                )
+                v_cell.font = Font(name="Calibri", size=11, bold=True, color="9C6500")
+            else:
+                v_cell.fill = PatternFill(
+                    start_color="F2F2F2", end_color="F2F2F2", fill_type="solid"
+                )
+                v_cell.font = Font(name="Calibri", size=11, italic=True, color="595959")
+
+        auto_fit_columns(ws_adv)
 
     ws_mf = wb.create_sheet(title="Mutual Funds")
     ws_mf.append(mf_headers)
