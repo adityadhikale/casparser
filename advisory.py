@@ -19,9 +19,14 @@ DEFAULT_ADVISORY_PATH = BASE_DIR / "data" / "Equity Portfolio Advisory.xlsx"
 def format_indian_number(val: Any, prefix: str = "", decimals: int = 2) -> str:
     """Formats a number in Indian numbering system (Lakhs and Crores).
     e.g. 275573.41 -> 2,75,573.41, 10000000 -> 1,00,00,000.00
+    Always outputs exactly `decimals` digits after the decimal point.
     """
     if val is None or val == "":
         return ""
+    if isinstance(val, str):
+        val = val.replace(",", "").replace("₹", "").replace("Rs.", "").replace("INR", "").strip()
+        if not val:
+            return ""
     try:
         num = float(val)
     except (ValueError, TypeError):

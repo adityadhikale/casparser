@@ -45,12 +45,47 @@ st.markdown(
         color: #4B5563;
         margin-bottom: 1.5rem;
     }
-    .metric-card {
+    /* Custom KPI Cards – replace st.metric to prevent truncation */
+    .kpi-card {
         background-color: #F8FAFC;
         border: 1px solid #E2E8F0;
-        border-radius: 8px;
-        padding: 1rem;
-        text-align: center;
+        border-radius: 10px;
+        padding: 0.85rem 0.75rem;
+        text-align: left;
+        height: 100%;
+        box-sizing: border-box;
+    }
+    .kpi-label {
+        font-size: 0.72rem;
+        font-weight: 600;
+        text-transform: uppercase;
+        letter-spacing: 0.05em;
+        color: #6B7280;
+        margin-bottom: 0.3rem;
+        white-space: nowrap;
+        overflow: hidden;
+        text-overflow: ellipsis;
+    }
+    .kpi-value {
+        font-size: 1.1rem;
+        font-weight: 700;
+        color: #1E3A8A;
+        white-space: normal;
+        word-break: break-all;
+        line-height: 1.3;
+        margin-bottom: 0.25rem;
+    }
+    .kpi-subtext {
+        font-size: 0.72rem;
+        color: #6B7280;
+        white-space: normal;
+        word-break: break-word;
+        line-height: 1.4;
+    }
+    /* Force Streamlit column containers to full height */
+    div[data-testid="stHorizontalBlock"] > div[data-testid="stColumn"] {
+        display: flex;
+        flex-direction: column;
     }
     .badge-buy {
         background-color: #DCFCE7;
@@ -286,30 +321,57 @@ def main():
             f"✅ Statement parsed successfully! {f'Period: {period_str}' if period_str else ''}"
         )
 
-        # Top KPI Metrics Cards (Indian Numbering System)
+        # Top KPI Cards – custom HTML to show full values without truncation
+        def kpi_card(label: str, value: str, subtext: str = "") -> str:
+            sub_html = f"<div class='kpi-subtext'>{subtext}</div>" if subtext else ""
+            return (
+                f"<div class='kpi-card'>"
+                f"<div class='kpi-label'>{label}</div>"
+                f"<div class='kpi-value'>{value}</div>"
+                f"{sub_html}"
+                f"</div>"
+            )
+
         m1, m2, m3, m4 = st.columns(4)
         with m1:
-            st.metric(
-                "Total Portfolio Value",
-                format_indian_number(totals["total_portfolio_value"], prefix="₹"),
+            st.markdown(
+                kpi_card(
+                    "Total Portfolio Value",
+                    format_indian_number(totals["total_portfolio_value"], prefix="₹"),
+                ),
+                unsafe_allow_html=True,
             )
         with m2:
-            st.metric(
-                "Demat Holdings",
-                format_indian_number(totals["demat_value"], prefix="₹"),
-                f"{len(export_data['demat_rows'])} items",
+            st.markdown(
+                kpi_card(
+                    "Demat Holdings",
+                    format_indian_number(totals["demat_value"], prefix="₹"),
+                    f"📦 {len(export_data['demat_rows'])} items",
+                ),
+                unsafe_allow_html=True,
             )
         with m3:
-            st.metric(
-                "Mutual Funds",
-                format_indian_number(totals["mf_value"], prefix="₹"),
-                f"{len(export_data['mf_rows'])} schemes",
+            st.markdown(
+                kpi_card(
+                    "Mutual Funds",
+                    format_indian_number(totals["mf_value"], prefix="₹"),
+                    f"📈 {len(export_data['mf_rows'])} schemes",
+                ),
+                unsafe_allow_html=True,
             )
         with m4:
-            st.metric(
-                "Investor",
-                investor.get("name", "N/A"),
-                f"PAN: {export_data['investor_table'][6][1]}",
+            pan_val = (
+                export_data["investor_table"][6][1]
+                if len(export_data["investor_table"]) > 6
+                else "N/A"
+            )
+            st.markdown(
+                kpi_card(
+                    "Investor",
+                    investor.get("name", "N/A"),
+                    f"PAN: {pan_val}",
+                ),
+                unsafe_allow_html=True,
             )
 
         # Download Buttons Bar
@@ -431,6 +493,22 @@ def main():
                     display_df,
                     use_container_width=True,
                     height=350,
+                    column_config={
+                        "Security (Demat)": st.column_config.TextColumn(
+                            "Security (Demat)", width="large"
+                        ),
+                        "Advisory Security": st.column_config.TextColumn(
+                            "Advisory Security", width="large"
+                        ),
+                        "Advisory View": st.column_config.TextColumn(
+                            "Advisory View", width="small"
+                        ),
+                        "Ticker": st.column_config.TextColumn("Ticker", width="small"),
+                        "Value (₹)": st.column_config.TextColumn("Value (₹)", width="medium"),
+                        "Units": st.column_config.TextColumn("Units", width="small"),
+                        "ISIN": st.column_config.TextColumn("ISIN", width="medium"),
+                        "Match Basis": st.column_config.TextColumn("Match Basis", width="small"),
+                    },
                 )
             else:
                 st.info("No equity holdings found to cross-reference.")
@@ -476,7 +554,25 @@ def main():
                     "bo_id": "BO ID",
                 }
                 demat_display.rename(columns=col_rename, inplace=True)
-                st.dataframe(demat_display, use_container_width=True, height=400)
+                st.dataframe(
+                    demat_display,
+                    use_container_width=True,
+                    height=400,
+                    column_config={
+                        "Security Name": st.column_config.TextColumn(
+                            "Security Name", width="large"
+                        ),
+                        "Advisory View": st.column_config.TextColumn(
+                            "Advisory View", width="small"
+                        ),
+                        "Ticker": st.column_config.TextColumn("Ticker", width="small"),
+                        "Value (₹)": st.column_config.TextColumn("Value (₹)", width="medium"),
+                        "Units": st.column_config.TextColumn("Units", width="small"),
+                        "Category": st.column_config.TextColumn("Category", width="small"),
+                        "ISIN": st.column_config.TextColumn("ISIN", width="medium"),
+                        "DP Name": st.column_config.TextColumn("DP Name", width="medium"),
+                    },
+                )
             else:
                 st.info("No Demat holdings present in this statement.")
 
@@ -512,7 +608,20 @@ def main():
                     mf_display["units"] = mf_display["units"].apply(
                         lambda x: format_indian_number(x, prefix="", decimals=3)
                     )
-                st.dataframe(mf_display, use_container_width=True, height=400)
+                st.dataframe(
+                    mf_display,
+                    use_container_width=True,
+                    height=400,
+                    column_config={
+                        "scheme_name": st.column_config.TextColumn("Scheme Name", width="large"),
+                        "amc": st.column_config.TextColumn("AMC", width="medium"),
+                        "value": st.column_config.TextColumn("Value (₹)", width="medium"),
+                        "cost": st.column_config.TextColumn("Cost (₹)", width="medium"),
+                        "nav": st.column_config.TextColumn("NAV (₹)", width="small"),
+                        "units": st.column_config.TextColumn("Units", width="small"),
+                        "folio_number": st.column_config.TextColumn("Folio", width="small"),
+                    },
+                )
             else:
                 st.info("No Mutual Fund holdings present in this statement.")
 
