@@ -18,6 +18,7 @@ from pathlib import Path
 import casparser
 from advisory import format_indian_number
 from excel_exporter import (
+    build_enriched_json,
     build_export_data,
     write_formatted_csv,
     write_formatted_excel,
@@ -41,11 +42,14 @@ def process_file(pdf_file: Path, password: str = "", out_dir: Path = OUTPUT_DIR)
         json_str = casparser.read_cas_pdf(str(pdf_file), password=password, output="json")
         parsed = json.loads(json_str)
 
-        json_out_path = out_dir / f"{base_stem}_parsed.json"
-        json_out_path.write_text(json_str, encoding="utf-8")
-        print(f"[✔] JSON Output saved: {json_out_path.name}")
-
         export_data = build_export_data(parsed, pdf_path=pdf_file)
+
+        enriched_json = build_enriched_json(parsed, export_data)
+        enriched_json_str = json.dumps(enriched_json, indent=2, default=str)
+
+        json_out_path = out_dir / f"{base_stem}_parsed.json"
+        json_out_path.write_text(enriched_json_str, encoding="utf-8")
+        print(f"[✔] Enriched JSON Output saved: {json_out_path.name}")
 
         csv_out_path = out_dir / f"{base_stem}_formatted.csv"
         write_formatted_csv(export_data, csv_out_path)

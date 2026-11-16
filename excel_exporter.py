@@ -17,6 +17,7 @@ Produces:
 """
 
 import csv
+import json
 import re
 from datetime import datetime
 from decimal import Decimal
@@ -538,16 +539,118 @@ def build_export_data(parsed: dict, pdf_path: Optional[Path] = None) -> dict:
     }
 
 
+def build_enriched_json(parsed: dict, export_data: dict) -> dict:
+    """Builds an enriched JSON containing complete advisory evaluations and Indian-formatted values."""
+    enriched = json.loads(json.dumps(parsed, default=str))
+    totals = export_data.get("totals", {})
+    advisory_res = export_data.get("advisory_data", {})
+
+    enriched["portfolio_summary"] = {
+        "total_portfolio_value": totals.get("total_portfolio_value", "0"),
+        "total_portfolio_value_formatted": format_indian_number(
+            totals.get("total_portfolio_value", 0), prefix="₹"
+        ),
+        "demat_value": totals.get("demat_value", "0"),
+        "demat_value_formatted": format_indian_number(totals.get("demat_value", 0), prefix="₹"),
+        "demat_count": len(export_data.get("demat_rows", [])),
+        "mutual_funds_value": totals.get("mf_value", "0"),
+        "mutual_funds_value_formatted": format_indian_number(totals.get("mf_value", 0), prefix="₹"),
+        "mutual_funds_count": len(export_data.get("mf_rows", [])),
+        "nps_value": totals.get("nps_value", "0"),
+        "nps_value_formatted": format_indian_number(totals.get("nps_value", 0), prefix="₹"),
+    }
+
+    if advisory_res:
+        summary_raw = advisory_res.get("summary", {})
+        summary_formatted = {}
+        for act, data in summary_raw.items():
+            summary_formatted[act] = {
+                "count": data.get("count", 0),
+                "value": str(data.get("value", 0)),
+                "value_formatted": format_indian_number(data.get("value", 0), prefix="₹"),
+            }
+
+        holdings_formatted = []
+        for h in advisory_res.get("holdings", []):
+            h_copy = dict(h)
+            h_copy["value_formatted"] = format_indian_number(h.get("value", 0), prefix="₹")
+            h_copy["units_formatted"] = format_indian_number(
+                h.get("units", 0), prefix="", decimals=3
+            )
+            holdings_formatted.append(h_copy)
+
+        enriched["equity_advisory"] = {
+            "total_evaluated_equities": advisory_res.get(
+                "total_equities_count", len(holdings_formatted)
+            ),
+            "total_equity_value": advisory_res.get("total_equity_value", "0"),
+            "total_equity_value_formatted": format_indian_number(
+                advisory_res.get("total_equity_value", 0), prefix="₹"
+            ),
+            "summary": summary_formatted,
+            "recommendations": holdings_formatted,
+        }
+
+    eval_map = {h.get("isin", "").upper(): h for h in advisory_res.get("holdings", [])}
+    for acc in enriched.get("accounts", []):
+        for eq in acc.get("equities", []):
+            isin_key = eq.get("isin", "").upper()
+            matched = eval_map.get(isin_key)
+            if matched:
+                eq["advisory_view"] = matched.get("advisory_view", "Not Covered")
+                eq["advisory_ticker"] = matched.get("advisory_ticker", "N/A")
+                eq["advisory_stock_name"] = matched.get("advisory_stock_name", "N/A")
+                eq["match_status"] = matched.get("match_status", "Not Covered")
+            else:
+                eq["advisory_view"] = "Not Covered"
+                eq["advisory_ticker"] = "N/A"
+                eq["advisory_stock_name"] = "N/A"
+                eq["match_status"] = "Not Covered"
+            if eq.get("value") is not None:
+                eq["value_formatted"] = format_indian_number(eq.get("value"), prefix="₹")
+            if eq.get("num_shares") is not None:
+                eq["num_shares_formatted"] = format_indian_number(
+                    eq.get("num_shares"), prefix="", decimals=3
+                )
+
+        for mf in acc.get("mutual_funds", []):
+            if mf.get("value") is not None:
+                mf["value_formatted"] = format_indian_number(mf.get("value"), prefix="₹")
+            if mf.get("nav") is not None:
+                mf["nav_formatted"] = format_indian_number(mf.get("nav"), prefix="₹")
+            if mf.get("balance") is not None:
+                mf["balance_formatted"] = format_indian_number(
+                    mf.get("balance"), prefix="", decimals=3
+                )
+
+    for folio in enriched.get("folios", []):
+        for scheme in folio.get("schemes", []):
+            val = scheme.get("valuation", {})
+            if val and val.get("value") is not None:
+                val["value_formatted"] = format_indian_number(val.get("value"), prefix="₹")
+            if val and val.get("nav") is not None:
+                val["nav_formatted"] = format_indian_number(val.get("nav"), prefix="₹")
+            if scheme.get("close") is not None:
+                scheme["close_formatted"] = format_indian_number(
+                    scheme.get("close"), prefix="", decimals=3
+                )
+
+    return enriched
+
+
 def write_formatted_csv(export_data: dict, output_path: Path):
-    """Writes the exact stacked multi-section CSV."""
+    """Writes the formatted stacked multi-section CSV with Advisory Views and Indian numbering formatting."""
     with open(output_path, "w", newline="", encoding="utf-8") as f:
         writer = csv.writer(f)
 
         for row in export_data["investor_table"]:
             writer.writerow(row)
 
-        for row in export_data["category_table"]:
-            writer.writerow(row)
+        writer.writerow(export_data["category_table"][0])
+        for row in export_data["category_table"][1:]:
+            cat_name, cat_val, cat_cnt = row[0], row[1], row[2]
+            formatted_v = format_indian_number(cat_val, prefix="₹")
+            writer.writerow([cat_name, formatted_v, cat_cnt])
 
         mf_headers = [
             "folio_number",
@@ -573,7 +676,17 @@ def write_formatted_csv(export_data: dict, output_path: Path):
         ]
         writer.writerow(mf_headers)
         for r in export_data["mf_rows"]:
-            writer.writerow([r.get(h, "") for h in mf_headers])
+            row_out = []
+            for h in mf_headers:
+                val = r.get(h, "")
+                if h in ("value", "cost", "gain_absolute", "info_investment_value"):
+                    val = format_indian_number(val, prefix="₹") if val != "" else ""
+                elif h in ("nav",):
+                    val = format_indian_number(val, prefix="₹") if val != "" else ""
+                elif h in ("units", "info_close_units", "info_open_units"):
+                    val = format_indian_number(val, prefix="", decimals=3) if val != "" else ""
+                row_out.append(val)
+            writer.writerow(row_out)
 
         txn_headers = [
             "folio_number",
@@ -595,7 +708,15 @@ def write_formatted_csv(export_data: dict, output_path: Path):
         ]
         writer.writerow(txn_headers)
         for r in export_data["txn_rows"]:
-            writer.writerow([r.get(h, "") for h in txn_headers])
+            row_out = []
+            for h in txn_headers:
+                val = r.get(h, "")
+                if h in ("amount", "nav", "txn_price"):
+                    val = format_indian_number(val, prefix="₹") if val != "" else ""
+                elif h in ("units", "balance"):
+                    val = format_indian_number(val, prefix="", decimals=3) if val != "" else ""
+                row_out.append(val)
+            writer.writerow(row_out)
 
         demat_headers = [
             "demat_type",
@@ -608,11 +729,87 @@ def write_formatted_csv(export_data: dict, output_path: Path):
             "name",
             "units",
             "value",
+            "advisory_view",
+            "advisory_ticker",
+            "advisory_stock_name",
         ]
         writer.writerow(demat_headers)
         for r in export_data["demat_rows"]:
-            writer.writerow([r.get(h, "") for h in demat_headers])
+            row_out = []
+            for h in demat_headers:
+                val = r.get(h, "")
+                if h == "value":
+                    val = format_indian_number(val, prefix="₹") if val != "" else ""
+                elif h == "units":
+                    val = format_indian_number(val, prefix="", decimals=3) if val != "" else ""
+                row_out.append(val)
+            writer.writerow(row_out)
 
+        # Dedicated Equity Advisory Section in CSV
+        advisory_res = export_data.get("advisory_data") or {}
+        advisory_holdings = advisory_res.get("holdings") or []
+        if advisory_holdings:
+            writer.writerow([])
+            writer.writerow(["PORTFOLIO ADVISORY RECOMMENDATIONS", ""])
+            summary = advisory_res.get("summary", {})
+            writer.writerow(
+                [
+                    "Total Evaluated Equities",
+                    advisory_res.get("total_equities_count", len(advisory_holdings)),
+                ]
+            )
+            writer.writerow(
+                [
+                    "Total Equity Valuation",
+                    format_indian_number(advisory_res.get("total_equity_value", 0), prefix="₹"),
+                ]
+            )
+            for action in ["BUY", "HOLD", "SELL", "ADD", "TRIM", "Not Covered"]:
+                cnt = summary.get(action, {}).get("count", 0)
+                val = summary.get(action, {}).get("value", 0)
+                if cnt > 0:
+                    writer.writerow(
+                        [
+                            f"Recommendation: {action}",
+                            f"{cnt} stocks ({format_indian_number(val, prefix='₹')})",
+                        ]
+                    )
+            writer.writerow([])
+
+            adv_headers = [
+                "demat_type",
+                "dp_id",
+                "client_id",
+                "isin",
+                "demat_stock_name",
+                "units",
+                "value",
+                "exchange_symbol",
+                "advisory_ticker",
+                "advisory_stock_name",
+                "advisory_view",
+                "match_status",
+            ]
+            writer.writerow(adv_headers)
+            for h in advisory_holdings:
+                writer.writerow(
+                    [
+                        h.get("demat_type", ""),
+                        h.get("dp_id", ""),
+                        h.get("client_id", ""),
+                        h.get("isin", ""),
+                        h.get("demat_stock_name", ""),
+                        format_indian_number(h.get("units", 0), prefix="", decimals=3),
+                        format_indian_number(h.get("value", 0), prefix="₹"),
+                        h.get("exchange_symbol", ""),
+                        h.get("advisory_ticker", ""),
+                        h.get("advisory_stock_name", ""),
+                        h.get("advisory_view", "Not Covered"),
+                        h.get("match_status", ""),
+                    ]
+                )
+
+        writer.writerow([])
         for row in export_data["metadata_table"]:
             writer.writerow(row)
 

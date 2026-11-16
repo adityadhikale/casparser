@@ -16,6 +16,7 @@ import streamlit as st
 import casparser
 from advisory import DEFAULT_ADVISORY_PATH, AdvisoryEngine, format_indian_number
 from excel_exporter import (
+    build_enriched_json,
     build_export_data,
     write_formatted_csv,
     write_formatted_excel,
@@ -112,6 +113,22 @@ def parse_cas_file(pdf_bytes: bytes, filename: str, password: str, advisory_engi
         if advisory_engine:
             advisory_data = advisory_engine.evaluate_holdings(export_data["demat_rows"])
             export_data["advisory_data"] = advisory_data
+            eval_map = {h.get("isin", "").upper(): h for h in advisory_data.get("holdings", [])}
+            for d_row in export_data["demat_rows"]:
+                isin_key = d_row.get("isin", "").upper()
+                matched = eval_map.get(isin_key)
+                if matched:
+                    d_row["advisory_view"] = matched.get("advisory_view", "Not Covered")
+                    d_row["advisory_ticker"] = matched.get("advisory_ticker", "N/A")
+                    d_row["advisory_stock_name"] = matched.get("advisory_stock_name", "N/A")
+                else:
+                    d_row["advisory_view"] = "Not Covered"
+                    d_row["advisory_ticker"] = "N/A"
+                    d_row["advisory_stock_name"] = "N/A"
+
+        # Build enriched JSON with advisory evaluations and Indian-formatted values
+        enriched_json = build_enriched_json(parsed, export_data)
+        enriched_json_str = json.dumps(enriched_json, indent=2, default=str)
 
         # Generate Excel in memory
         with tempfile.NamedTemporaryFile(delete=False, suffix=".xlsx") as tmp_xlsx:
@@ -135,8 +152,9 @@ def parse_cas_file(pdf_bytes: bytes, filename: str, password: str, advisory_engi
 
         return {
             "parsed": parsed,
+            "enriched_json": enriched_json,
             "export_data": export_data,
-            "json_str": json_str,
+            "json_str": enriched_json_str,
             "excel_bytes": excel_bytes,
             "csv_bytes": csv_bytes,
             "error": None,
@@ -532,10 +550,10 @@ def main():
                 )
                 st.table(cat_df)
 
-        # TAB 6: Raw JSON
+        # TAB 6: Enriched JSON
         with tab_json:
-            st.subheader("🔍 Structured JSON")
-            st.json(parsed)
+            st.subheader("🔍 Structured JSON (with Equity Advisory & Indian Formatting)")
+            st.json(result.get("enriched_json", parsed))
 
 
 if __name__ == "__main__":
