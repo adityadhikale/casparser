@@ -243,25 +243,34 @@ def main():
             type="password",
             help="Usually PAN (UPPERCASE) or DOB (DDMMYYYY) or as specified by the issuer. Leave empty if none.",
         )
+        parse_btn = st.button("🚀 Parse Statement", type="primary", use_container_width=True)
 
-    file_to_parse = None
-    filename_to_parse = ""
+    if parse_btn:
+        if uploaded_file is None:
+            st.warning("⚠️ Please upload a CAS PDF statement first.")
+        else:
+            with st.spinner("Processing CAS statement and analyzing equity advisory..."):
+                file_bytes = uploaded_file.read()
+                res = parse_cas_file(file_bytes, uploaded_file.name, password, advisory_engine)
+                if res.get("error"):
+                    st.error(res["error"])
+                else:
+                    st.session_state["parsed_result"] = res
+                    st.session_state["filename"] = uploaded_file.name
 
-    if uploaded_file is not None:
-        file_to_parse = uploaded_file.read()
-        filename_to_parse = uploaded_file.name
-    elif use_sample and sample_path.exists():
-        file_to_parse = sample_path.read_bytes()
-        filename_to_parse = sample_path.name
-        st.info(f"Loaded sample file: `{filename_to_parse}`")
+    elif use_sample and sample_path and sample_path.exists():
+        with st.spinner("Processing sample CAS statement..."):
+            file_bytes = sample_path.read_bytes()
+            res = parse_cas_file(file_bytes, sample_path.name, password, advisory_engine)
+            if res.get("error"):
+                st.error(res["error"])
+            else:
+                st.session_state["parsed_result"] = res
+                st.session_state["filename"] = sample_path.name
 
-    if file_to_parse:
-        with st.spinner("Processing CAS statement and analyzing equity advisory..."):
-            result = parse_cas_file(file_to_parse, filename_to_parse, password, advisory_engine)
-
-        if result.get("error"):
-            st.error(result["error"])
-            return
+    if "parsed_result" in st.session_state:
+        result = st.session_state["parsed_result"]
+        filename_to_parse = st.session_state.get("filename", "CAS_Statement.pdf")
 
         export_data = result["export_data"]
         parsed = result["parsed"]
