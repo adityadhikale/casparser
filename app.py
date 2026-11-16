@@ -180,11 +180,23 @@ def main():
 
         st.markdown("---")
         st.markdown("### 💡 Quick Sample Test")
-        sample_path = Path(__file__).resolve().parent / "input" / "OCT2026_AA10459269.pdf"
+        input_dir = Path(__file__).resolve().parent / "input"
+        available_samples = sorted(list(input_dir.glob("*.pdf")))
         use_sample = False
-        if sample_path.exists():
-            if st.button("Load Sample Statement (CDSL)"):
+        sample_path = None
+
+        if available_samples:
+            unprotected = [f for f in available_samples if "Protected" not in f.name]
+            default_sample = unprotected[0] if unprotected else available_samples[0]
+            selected_sample = st.selectbox(
+                "Select Sample File:",
+                options=available_samples,
+                format_func=lambda p: p.name,
+                index=available_samples.index(default_sample),
+            )
+            if st.button("🚀 Load Sample Statement"):
                 use_sample = True
+                sample_path = selected_sample
 
         st.markdown("---")
         st.caption("Powered by **casparser** & **openpyxl** | © 2026 Aditya Dhikale")
