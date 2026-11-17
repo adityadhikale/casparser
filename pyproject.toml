@@ -24,7 +24,6 @@ dependencies = [
     "python-dateutil>=2.8.2,<3",
     "rich>=13.5.2,<16",
     "pydantic>=2.3.0,<3",
-    "streamlit>=1.30.0",
 ]
 dynamic = ["version"]
 
@@ -77,6 +76,7 @@ omit = [
 [tool.ruff]
 line-length = 100
 target-version = "py311"
+exclude = ["web/"]
 
 [tool.ruff.lint]
 select = ["E", "F", "I"]

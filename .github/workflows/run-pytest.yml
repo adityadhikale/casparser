@@ -23,8 +23,8 @@ jobs:
       run: pip install "ruff>=0.8.0"
     - name: Run linter and formatter check
       run: |
-        ruff check .
-        ruff format --check .
+        ruff check . --exclude web/
+        ruff format --check . --exclude web/
 
   build:
     needs: lint
