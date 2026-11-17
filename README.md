@@ -50,11 +50,75 @@ casparser/
 │   ├── parsers/            # CDSL, NSDL, CAMS, and KFintech parsers
 │   ├── analysis/           # Capital gains and portfolio analytics
 │   └── cli.py              # Command-line interface
+├── api/                    # FastAPI backend (web application)
+│   └── main.py             # API routes: /api/parse, /api/market/*, /api/advisory/status
+├── web/                    # Vite + React + TypeScript frontend
+│   ├── src/                # React components, hooks, and styles
+│   └── dist/               # Production build output (served by FastAPI)
+├── data/                   # Equity Portfolio Advisory.xlsx (advisory model)
+├── service.py              # PDF parse service (UI-agnostic, used by API)
+├── market.py               # Yahoo Finance market data layer (cached)
 ├── excel_exporter.py       # Multi-tab Excel and formatted CSV builder
-├── run_parser.py           # Batch / single-file automated runner
-├── tests/                  # Unit and integration test suites
+├── run_parser.py           # CLI batch / single-file runner
+├── run_web.bat             # Windows one-click launcher for the web app
+├── Dockerfile              # Multi-stage container build
+├── requirements.txt        # Python dependencies
 └── pyproject.toml          # Project configuration & dependencies
 ```
+
+---
+
+## Web Application (FastAPI + React)
+
+A modern full-stack web dashboard that parses CAS statements in real-time, cross-references equity demat holdings against the internal CREST advisory model (`data/Equity Portfolio Advisory.xlsx`), and fetches live Yahoo Finance quotes and market indices.
+
+### Features
+- **Instant Client-Side Parsing**: Upload CAS PDFs (CDSL, NSDL, CAMS, KFintech) with optional password support. Nothing from the statement is permanently saved on the server.
+- **Equity Advisory Matching**: Instant BUY, ADD, HOLD, TRIM, SELL, and Not Covered badge matching by ISIN, ticker, and company name.
+- **Live Market Feed**: Real-time indicative market strip (Nifty 50, Sensex, Bank Nifty, India VIX, USD/INR, Gold, Brent) with 1-month sparklines, today's P&L, day change %, and 52-week ranges via Yahoo Finance.
+- **Interactive Visualizations**: Asset allocation donut chart, advisory distribution bar chart, top holdings chart, and full export capabilities (formatted multi-tab Excel, CSV, JSON).
+
+### Running Locally
+
+#### Windows (One-Click)
+Double-click `run_web.bat` in the root folder, or run:
+```bat
+run_web.bat
+```
+This starts the backend and automatically opens `http://127.0.0.1:8000`.
+
+#### Manual Startup
+```bash
+# Activate virtual environment
+# Windows: .venv\Scripts\activate
+# Linux/macOS: source .venv/bin/activate
+
+python -m uvicorn api.main:app --host 127.0.0.1 --port 8000
+```
+Open `http://127.0.0.1:8000` in your web browser.
+
+#### Building the Frontend (Vite)
+If you make frontend changes inside `web/`:
+```bash
+cd web
+npm install
+npm run build
+```
+
+---
+
+## Docker Deployment
+
+A production-ready multi-stage Dockerfile is included:
+
+```bash
+# Build the Docker image
+docker build -t crest-casparser .
+
+# Run the container on port 8000
+docker run -p 8000:8000 crest-casparser
+```
+Access the application at `http://localhost:8000`.
 
 ---
 

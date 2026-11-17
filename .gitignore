@@ -146,3 +146,10 @@ input/*
 output/*
 !output/.gitkeep
 .venv/
+
+# Web build artifacts
+web/node_modules/
+web/dist/
+
+# Internal dev notes (not for version control)
+HANDOFF.md
