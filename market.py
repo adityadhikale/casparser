@@ -114,7 +114,15 @@ def overview() -> list[dict]:
     def load():
         syms = [s for s, _ in INDICES]
         try:
-            hist = yf.download(syms, period="1mo", interval="1d", progress=False, auto_adjust=False, group_by="ticker", threads=True)
+            hist = yf.download(
+                syms,
+                period="1mo",
+                interval="1d",
+                progress=False,
+                auto_adjust=False,
+                group_by="ticker",
+                threads=True,
+            )
         except Exception:
             hist = None
 
@@ -126,8 +134,14 @@ def overview() -> list[dict]:
             except Exception:
                 pass
             q = _quote(sym)
-            price = q.get("price") if q.get("price") is not None else (closes[-1] if closes else None)
-            prev = q.get("prev_close") if q.get("prev_close") is not None else (closes[-2] if len(closes) > 1 else None)
+            price = (
+                q.get("price") if q.get("price") is not None else (closes[-1] if closes else None)
+            )
+            prev = (
+                q.get("prev_close")
+                if q.get("prev_close") is not None
+                else (closes[-2] if len(closes) > 1 else None)
+            )
             return {
                 "symbol": sym,
                 "name": name,
@@ -162,11 +176,14 @@ def news(symbols: list[str], limit: int = 12) -> list[dict]:
                 if not title or title in seen:
                     continue
                 seen.add(title)
-                url = (c.get("canonicalUrl") or c.get("clickThroughUrl") or {}).get("url") or c.get("link")
+                url = (c.get("canonicalUrl") or c.get("clickThroughUrl") or {}).get("url") or c.get(
+                    "link"
+                )
                 out.append(
                     {
                         "title": title,
-                        "publisher": (c.get("provider") or {}).get("displayName") or c.get("publisher"),
+                        "publisher": (c.get("provider") or {}).get("displayName")
+                        or c.get("publisher"),
                         "url": url,
                         "time": c.get("pubDate") or c.get("providerPublishTime"),
                         "symbol": sym,
