@@ -17,6 +17,16 @@ export interface Quote {
   live_value?: number | null
   day_pnl?: number | null
 }
+/** End-of-day NAV for a mutual fund (funds don't trade intraday). */
+export interface MfNav {
+  isin: string
+  symbol: string | null
+  nav: number | null
+  prev_nav?: number | null
+  nav_date?: string
+  change?: number | null
+  change_pct?: number | null
+}
 export interface Index { symbol: string; name: string; price: number | null; change: number | null; change_pct: number | null; spark: number[] }
 export interface NewsItem { title: string; publisher?: string; url?: string; time?: string; symbol: string }
 
@@ -25,6 +35,7 @@ export interface Market {
   error: boolean
   indices: Index[]
   quotes: Record<string, Quote>
+  mfNavs: Record<string, MfNav>
   news: NewsItem[]
   dayPnl: number
   dayPnlPct: number | null
@@ -37,7 +48,7 @@ const num = (v: unknown) => (typeof v === 'number' && isFinite(v) ? v : null)
 
 export function useMarket(res: Result): Market {
   const [state, setState] = useState<Omit<Market, 'refresh' | 'dayPnl' | 'dayPnlPct' | 'liveTotal'>>({
-    loading: true, error: false, indices: [], quotes: {}, news: [], asOf: null,
+    loading: true, error: false, indices: [], quotes: {}, mfNavs: {}, news: [], asOf: null,
   })
   const [tick, setTick] = useState(0)
 
@@ -47,18 +58,26 @@ export function useMarket(res: Result): Market {
     const hold = (res.demat || [])
       .filter((d) => d.isin)
       .map((d) => ({ isin: d.isin, name: d.name, units: num(d.units), ticker: d.advisory_ticker && d.advisory_ticker !== 'N/A' ? d.advisory_ticker : '' }))
+    const mfIsins = [...new Set((res.mf || []).map((f) => String(f.isin || '').toUpperCase()).filter(Boolean))]
     ;(async () => {
       try {
-        const [ov, q] = await Promise.all([
+        const [ov, q, mf] = await Promise.all([
           fetch('/api/market/overview').then((r) => r.json()).catch(() => []),
           fetch('/api/market/holdings', { method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify({ holdings: hold }) }).then((r) => r.json()).catch(() => []),
+          mfIsins.length
+            ? fetch('/api/market/mf', { method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify({ isins: mfIsins }) }).then((r) => r.json()).catch(() => [])
+            : Promise.resolve([]),
         ])
         if (dead) return
         const quotes: Record<string, Quote> = {}
         if (Array.isArray(q)) {
           for (const x of q as Quote[]) if (x && x.isin) quotes[x.isin] = x
         }
-        setState({ loading: false, error: false, indices: Array.isArray(ov) ? ov : [], quotes, news: [], asOf: new Date() })
+        const mfNavs: Record<string, MfNav> = {}
+        if (Array.isArray(mf)) {
+          for (const x of mf as MfNav[]) if (x && x.isin) mfNavs[x.isin.toUpperCase()] = x
+        }
+        setState({ loading: false, error: false, indices: Array.isArray(ov) ? ov : [], quotes, mfNavs, news: [], asOf: new Date() })
         // news for the 5 biggest holdings + Nifty
         const top = [...(res.demat || [])].filter((d) => num(d.value)).sort((a, b) => b.value - a.value)
           .map((d) => quotes[d.isin]?.symbol).filter(Boolean).slice(0, 5) as string[]
@@ -151,6 +170,22 @@ function ago(t?: string) {
   return h < 1 ? `${Math.max(1, Math.round(h * 60))}m ago` : h < 48 ? `${Math.round(h)}h ago` : d.toLocaleDateString('en-IN', { day: 'numeric', month: 'short' })
 }
 
+/** Statement mutual fund rows plus latest NAV, NAV date, day change and current value. */
+export function withMfNav(res: Result, navs: Record<string, MfNav> | undefined): Row[] {
+  return (res.mf || []).map((f) => {
+    const n = navs?.[String(f.isin || '').toUpperCase()]
+    const u = typeof f.units === 'number' ? f.units : null
+    const nav = n?.nav ?? null
+    return {
+      ...f, latest_nav: nav, nav_date: n?.nav_date ?? null, change_pct: n?.change_pct ?? null,
+      day_pnl: u != null && n?.change != null ? u * n.change : null,
+      current_value: u != null && nav != null ? u * nav : null,
+    }
+  })
+}
+export const navFmt = (v: number | null) => (v == null ? '—' : `₹${v.toLocaleString('en-IN', { minimumFractionDigits: 2, maximumFractionDigits: 4 })}`)
+export const dateFmt = (v: string | null) => (v ? new Date(v).toLocaleDateString('en-IN', { day: 'numeric', month: 'short', year: 'numeric' }) : '—')
+
 export function MarketTab({ res, m }: { res: Result; m: Market }) {
   const rows: Row[] = useMemo(() => (res.demat || []).map((d) => {
     const q = m.quotes?.[d.isin]
@@ -160,6 +195,19 @@ export function MarketTab({ res, m }: { res: Result; m: Market }) {
   const movers = [...live].filter((r) => r.change_pct != null).sort((a, b) => (b.change_pct ?? 0) - (a.change_pct ?? 0))
   const gain = movers.slice(0, 3), lose = movers.slice(-3).reverse().filter((r) => r.change_pct < 0)
   const name = (v: string) => String(v ?? '').split('#')[0].trim()
+
+  const mfRows = useMemo(() => withMfNav(res, m.mfNavs), [res, m.mfNavs])
+  const mfCols: Col[] = [
+    { key: 'scheme_name', label: 'Scheme', render: (v) => <span title={v}>{String(v ?? '').replace(/^[A-Z0-9]{2,6} - /, '')}</span> },
+    ...(mfRows.some((r) => r.owner) ? [{ key: 'owner', label: 'Owner' } as Col] : []),
+    { key: 'units', label: 'Units', numeric: true, render: (v) => (typeof v === 'number' ? v.toLocaleString('en-IN', { maximumFractionDigits: 3 }) : '—') },
+    { key: 'latest_nav', label: 'Latest NAV', numeric: true, render: navFmt },
+    { key: 'nav_date', label: 'NAV date', render: dateFmt },
+    { key: 'change_pct', label: 'Day %', numeric: true, render: (v) => <span className={signCls(v)}>{pct(v)}</span> },
+    { key: 'day_pnl', label: 'Day P&L', numeric: true, render: (v) => <span className={signCls(v)}>{signed(v)}</span> },
+    { key: 'current_value', label: 'Current value', numeric: true, render: (v) => rupee(v) },
+    { key: 'value', label: 'Statement value', numeric: true, render: (v) => rupee(v) },
+  ]
 
   const cols: Col[] = [
     { key: 'name', label: 'Security', render: (v) => <span title={v}>{name(v)}</span> },
@@ -191,6 +239,12 @@ export function MarketTab({ res, m }: { res: Result; m: Market }) {
       <DataTable rows={rows} cols={cols} empty={m.loading ? 'Fetching live prices…' : 'No live prices found.'} />
       <p className="muted" style={{ fontSize: 12, margin: '8px 0 0' }}>
         {live.length} of {rows.length} demat holdings matched to a Yahoo Finance symbol. Bonds, SGBs and delisted securities usually have no live quote.
+      </p>
+
+      <h2 style={{ margin: '26px 0 12px' }}>Mutual funds, latest NAV</h2>
+      <DataTable rows={mfRows} cols={mfCols} empty={m.loading ? 'Fetching NAVs…' : 'No mutual funds in this statement.'} />
+      <p className="muted" style={{ fontSize: 12, margin: '8px 0 0' }}>
+        {mfRows.filter((r) => r.latest_nav != null).length} of {mfRows.length} funds matched on Yahoo Finance. Funds don&apos;t trade intraday: NAV is published once a day after market close, so each row shows its own NAV date. Day change compares with the previous NAV.
       </p>
 
       <h2 style={{ margin: '26px 0 12px' }}>Market &amp; holdings news</h2>

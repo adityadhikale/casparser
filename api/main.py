@@ -65,6 +65,67 @@ async def parse(
     return payload
 
 
+MAX_FILES = 10
+
+
+def _b64_exports(xlsx: bytes, csv: bytes) -> dict:
+    return {"xlsx": base64.b64encode(xlsx).decode(), "csv": base64.b64encode(csv).decode()}
+
+
+@app.post("/api/parse-multi")
+async def parse_multi(
+    pdfs: list[UploadFile] = File(...),
+    passwords: list[str] = Form(default_factory=list),
+    advisory: UploadFile | None = File(None),
+):
+    """Parse several CAS PDFs (one per family member) and consolidate them.
+
+    ``passwords[i]`` belongs to ``pdfs[i]``; missing entries mean no password.
+    """
+    if not pdfs:
+        raise HTTPException(400, "Upload at least one PDF.")
+    if len(pdfs) > MAX_FILES:
+        raise HTTPException(400, f"Upload at most {MAX_FILES} statements at a time.")
+
+    files: list[tuple[str, bytes, str]] = []
+    for i, up in enumerate(pdfs):
+        label = up.filename or f"statement {i + 1}"
+        data = await up.read()
+        if not data:
+            raise HTTPException(400, f"{label} is empty.")
+        if len(data) > MAX_PDF:
+            raise HTTPException(413, f"{label} is larger than 25 MB.")
+        files.append((label, data, passwords[i] if i < len(passwords) else ""))
+
+    engine = service.get_default_engine()
+    if advisory is not None and advisory.filename:
+        data = await advisory.read()
+        if len(data) > MAX_XLSX:
+            raise HTTPException(413, "Advisory file is larger than 10 MB.")
+        try:
+            engine = service.engine_from_bytes(data)
+        except Exception as exc:
+            raise HTTPException(400, f"Could not read advisory file: {exc}") from exc
+
+    try:
+        result = service.parse_family(files, engine)
+    except service.ParseError as exc:
+        raise HTTPException(422, str(exc)) from exc
+
+    status = service.advisory_status(engine)
+    fam, fam_xlsx, fam_csv = result["family"]
+    fam["filename"] = "Family_CAS_Report"
+    fam["advisory_status"] = status
+    fam["exports"] = _b64_exports(fam_xlsx, fam_csv)
+    members = []
+    for stem, payload, xlsx, csv in result["members"]:
+        payload["filename"] = stem
+        payload["advisory_status"] = status
+        payload["exports"] = _b64_exports(xlsx, csv)
+        members.append(payload)
+    return {"family": fam, "members": members, "warnings": result["warnings"]}
+
+
 class HoldingIn(BaseModel):
     isin: str = ""
     name: str = ""
@@ -81,6 +142,17 @@ def market_holdings(body: HoldingsIn):
     if len(body.holdings) > 200:
         raise HTTPException(413, "Too many holdings.")
     return market.holdings_quotes([h.model_dump() for h in body.holdings])
+
+
+class MfIn(BaseModel):
+    isins: list[str]
+
+
+@app.post("/api/market/mf")
+def market_mf(body: MfIn):
+    if len(body.isins) > 200:
+        raise HTTPException(413, "Too many funds.")
+    return market.mf_navs(body.isins)
 
 
 @app.get("/api/market/overview")

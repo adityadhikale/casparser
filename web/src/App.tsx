@@ -12,8 +12,8 @@ import { ErrorBoundary } from './ErrorBoundary'
 import DataTable, { ViewBadge, type Col } from './DataTable'
 import { CountUp, ease } from './motion'
 import { b64ToBytes, compact, download, rupee, units } from './format'
-import type { Result, Row } from './types'
-import { MarketStrip, MarketTab, pct, signCls, signed, useMarket } from './Market'
+import type { FamilyResult, Result, Row } from './types'
+import { MarketStrip, MarketTab, dateFmt, navFmt, pct, signCls, signed, useMarket, withMfNav } from './Market'
 
 const VIEWS = ['BUY', 'ADD', 'HOLD', 'TRIM', 'SELL', 'Not Covered']
 const VIEW_COLOR: Record<string, string> = {
@@ -32,13 +32,13 @@ const Kpi = ({ label, value, sub, num, fmt, tone }: { label: string; value: stri
 
 export default function App() {
   const { theme, setTheme } = useTheme()
-  const [file, setFile] = useState<File | null>(null)
+  const [items, setItems] = useState<{ file: File; password: string }[]>([])
   const [adv, setAdv] = useState<File | null>(null)
-  const [password, setPassword] = useState('')
-  const [needsPw, setNeedsPw] = useState(false)
   const [busy, setBusy] = useState(false)
   const [error, setError] = useState('')
-  const [res, setRes] = useState<Result | null>(null)
+  const [single, setSingle] = useState<Result | null>(null)
+  const [fam, setFam] = useState<FamilyResult | null>(null)
+  const [sel, setSel] = useState(-1) // -1 = whole family, otherwise member index
   const [over, setOver] = useState(false)
   const [status, setStatus] = useState<{ loaded: boolean; count: number } | null>(null)
   const pdfRef = useRef<HTMLInputElement>(null)
@@ -48,23 +48,40 @@ export default function App() {
     fetch('/api/advisory/status').then((r) => r.json()).then(setStatus).catch(() => setStatus(null))
   }, [])
 
+  const MAX_FILES = 10
+  function addFiles(list: FileList | File[] | null) {
+    if (!list) return
+    const pdfs = Array.from(list).filter((f) => /\.pdf$/i.test(f.name) || f.type === 'application/pdf')
+    if (!pdfs.length) return
+    setItems((cur) => {
+      const names = new Set(cur.map((i) => `${i.file.name}:${i.file.size}`))
+      const fresh = pdfs.filter((f) => !names.has(`${f.name}:${f.size}`)).map((file) => ({ file, password: '' }))
+      return [...cur, ...fresh].slice(0, MAX_FILES)
+    })
+  }
+
   async function parse() {
-    if (!file) return
+    if (!items.length) return
     setBusy(true); setError('')
     const fd = new FormData()
-    fd.append('pdf', file); fd.append('password', password)
+    const multi = items.length > 1
+    if (multi) items.forEach((i) => { fd.append('pdfs', i.file); fd.append('passwords', i.password) })
+    else { fd.append('pdf', items[0].file); fd.append('password', items[0].password) }
     if (adv) fd.append('advisory', adv)
     try {
-      const r = await fetch('/api/parse', { method: 'POST', body: fd })
+      const r = await fetch(multi ? '/api/parse-multi' : '/api/parse', { method: 'POST', body: fd })
       const body = await r.json().catch(() => ({}))
       if (!r.ok) throw new Error(body.detail || `Request failed (${r.status})`)
-      setRes(body); toast.success('Statement parsed')
+      if (multi) { setFam(body); setSel(-1) } else setSingle(body)
+      toast.success(multi ? `${items.length} statements consolidated` : 'Statement parsed')
     } catch (e) {
       const m = e instanceof Error ? e.message : 'Something went wrong.'
       setError(m); toast.error(m)
     } finally { setBusy(false) }
   }
 
+  const res: Result | null = fam ? (sel < 0 ? fam.family : fam.members[sel] ?? fam.family) : single
+  const reset = () => { setSingle(null); setFam(null); setSel(-1); setItems([]) }
   const advStatus = res?.advisory_status ?? status
   const dark = theme === 'dark'
 
@@ -87,7 +104,7 @@ export default function App() {
           {!res ? (
             <motion.div key="up" initial={{ opacity: 0, y: 12 }} animate={{ opacity: 1, y: 0 }} exit={{ opacity: 0, y: -12 }} transition={{ duration: 0.35, ease }}>
               <h1 className="hero">Parse a statement</h1>
-              <p className="muted lead">Upload a CDSL, NSDL, CAMS or KFintech CAS PDF. Holdings are cross-checked against the CREST equity advisory list. Nothing is stored on the server.</p>
+              <p className="muted lead">Upload a CDSL, NSDL, CAMS or KFintech CAS PDF, or several (one per family member) to see one consolidated portfolio. Holdings are cross-checked against the CREST equity advisory list. Nothing is stored on the server.</p>
               <div className="upload-grid">
                 <motion.div
                   whileHover={{ scale: 1.01 }} whileTap={{ scale: 0.99 }} transition={{ type: 'spring', stiffness: 400, damping: 30 }}
@@ -97,24 +114,31 @@ export default function App() {
                   onKeyDown={(e) => (e.key === 'Enter' || e.key === ' ') && pdfRef.current?.click()}
                   onDragOver={(e) => { e.preventDefault(); setOver(true) }}
                   onDragLeave={() => setOver(false)}
-                  onDrop={(e) => { e.preventDefault(); setOver(false); const f = e.dataTransfer.files[0]; if (f) setFile(f) }}
+                  onDrop={(e) => { e.preventDefault(); setOver(false); addFiles(e.dataTransfer.files) }}
                 >
                   <UploadCloud size={32} strokeWidth={1.5} color="var(--brand)" />
-                  <div className="big">{file ? file.name : 'Drop your CAS PDF here, or click to browse'}</div>
-                  <div className="muted">{file ? `${(file.size / 1024).toFixed(0)} KB` : 'PDF up to 25 MB'}</div>
-                  <input ref={pdfRef} type="file" accept="application/pdf,.pdf" hidden onChange={(e) => setFile(e.target.files?.[0] ?? null)} />
+                  <div className="big">{items.length ? 'Add more statements' : 'Drop CAS PDFs here, or click to browse'}</div>
+                  <div className="muted">One PDF per family member · up to {MAX_FILES} files · 25 MB each</div>
+                  <input ref={pdfRef} type="file" accept="application/pdf,.pdf" multiple hidden onChange={(e) => { addFiles(e.target.files); e.target.value = '' }} />
                 </motion.div>
                 <div className="card">
-                  <label style={{ display: 'flex', gap: 8, alignItems: 'center', cursor: 'pointer' }}>
-                    <input type="checkbox" checked={needsPw} onChange={(e) => { setNeedsPw(e.target.checked); if (!e.target.checked) setPassword('') }} />
-                    PDF is password protected
-                  </label>
-                  {needsPw && (
-                    <div style={{ marginTop: 10 }}>
-                      <label className="field" htmlFor="pw">PDF password</label>
-                      <input id="pw" type="password" autoComplete="off" value={password} onChange={(e) => setPassword(e.target.value)} onKeyDown={(e) => e.key === 'Enter' && parse()} />
+                  {items.length === 0 && <div className="muted">No statements added yet.</div>}
+                  {items.map((it, idx) => (
+                    <div key={`${it.file.name}:${it.file.size}`} style={{ marginBottom: 16 }}>
+                      <div style={{ display: 'flex', gap: 8, alignItems: 'center', marginBottom: 8 }}>
+                        <FileText size={15} />
+                        <span style={{ flex: 1, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }} title={it.file.name}>{it.file.name}</span>
+                        <span className="muted">{(it.file.size / 1024).toFixed(0)} KB</span>
+                        <button className="icon-btn" style={{ width: 28, height: 28, flexShrink: 0 }} aria-label={`Remove ${it.file.name}`} onClick={() => setItems((cur) => cur.filter((_, j) => j !== idx))}>×</button>
+                      </div>
+                      <input
+                        type="password" autoComplete="off" placeholder="Password (leave blank if none)" aria-label={`Password for ${it.file.name}`}
+                        value={it.password}
+                        onChange={(e) => setItems((cur) => cur.map((c, j) => (j === idx ? { ...c, password: e.target.value } : c)))}
+                        onKeyDown={(e) => e.key === 'Enter' && parse()}
+                      />
                     </div>
-                  )}
+                  ))}
                   <div style={{ margin: '16px 0 8px' }}>
                     <label className="field">Advisory database</label>
                     <span className={`chip ${advStatus?.loaded || adv ? 'ok' : ''}`}>
@@ -123,8 +147,8 @@ export default function App() {
                     <button className="btn" style={{ padding: '4px 10px', fontSize: 12 }} onClick={() => advRef.current?.click()}>Replace</button>
                     <input ref={advRef} type="file" accept=".xlsx" hidden onChange={(e) => setAdv(e.target.files?.[0] ?? null)} />
                   </div>
-                  <motion.button whileTap={{ scale: 0.97 }} className={`btn primary ${busy ? 'shimmer' : ''}`} disabled={!file || busy} onClick={parse}>
-                    {busy ? <><Loader2 size={16} className="spin" /> Parsing…</> : 'Parse statement'}
+                  <motion.button whileTap={{ scale: 0.97 }} className={`btn primary ${busy ? 'shimmer' : ''}`} disabled={!items.length || busy} onClick={parse}>
+                    {busy ? <><Loader2 size={16} className="spin" /> Parsing…</> : items.length > 1 ? `Parse & consolidate ${items.length} statements` : 'Parse statement'}
                   </motion.button>
                 </div>
               </div>
@@ -133,7 +157,11 @@ export default function App() {
           ) : (
             <motion.div key="dash" initial={{ opacity: 0 }} animate={{ opacity: 1 }} exit={{ opacity: 0 }} transition={{ duration: 0.3 }}>
               <ErrorBoundary>
-                <Dashboard res={res} onReset={() => { setRes(null); setFile(null); setPassword('') }} />
+                <Dashboard
+                  res={res} onReset={reset}
+                  owners={fam ? fam.members.map((m) => m.investor.name) : undefined}
+                  sel={sel} onSel={setSel} warnings={fam?.warnings}
+                />
               </ErrorBoundary>
             </motion.div>
           )}
@@ -143,7 +171,10 @@ export default function App() {
   )
 }
 
-function Dashboard({ res, onReset }: { res: Result; onReset: () => void }) {
+function Dashboard({ res, onReset, owners, sel, onSel, warnings }: {
+  res: Result; onReset: () => void
+  owners?: string[]; sel: number; onSel: (i: number) => void; warnings?: string[]
+}) {
   const [tab, setTab] = useState('advisory')
   const m = useMarket(res)
   const [filter, setFilter] = useState('All')
@@ -168,7 +199,14 @@ function Dashboard({ res, onReset }: { res: Result; onReset: () => void }) {
     .slice(0, 10)
     .map((d) => ({ name: String(d.name ?? '').split('#')[0].trim().replace(/ (LIMITED|LTD\.?)$/i, ''), value: d.value as number, view: d.advisory_view as string }))
   const topConfig = { value: { label: 'Value' } } satisfies ChartConfig
-  const withLive: Row[] = (holdings || []).map((h) => ({ ...h, ltp: m.quotes?.[h.isin]?.price ?? null, change_pct: m.quotes?.[h.isin]?.change_pct ?? null }))
+  const familyView = res.demat.some((d) => d.owner) || res.mf.some((d) => d.owner)
+  const ownerByIsin: Record<string, string> = {}
+  res.demat.forEach((d) => { if (d.owner) ownerByIsin[String(d.isin).toUpperCase()] = d.owner })
+  const ownerCol: Col[] = familyView ? [{ key: 'owner', label: 'Owner' }] : []
+  const withLive: Row[] = (holdings || []).map((h) => ({
+    ...h, owner: ownerByIsin[String(h.isin).toUpperCase()] ?? '',
+    ltp: m.quotes?.[h.isin]?.price ?? null, change_pct: m.quotes?.[h.isin]?.change_pct ?? null,
+  }))
   const shown = filter === 'All' ? withLive : withLive.filter((h) => h.advisory_view === filter)
 
   const view = (v: string) => <ViewBadge v={v} />
@@ -176,6 +214,7 @@ function Dashboard({ res, onReset }: { res: Result; onReset: () => void }) {
 
   const advCols: Col[] = [
     { key: 'demat_stock_name', label: 'Security (demat)', render: secName },
+    ...ownerCol,
     { key: 'advisory_view', label: 'View', render: view },
     { key: 'advisory_ticker', label: 'Ticker' },
     { key: 'advisory_stock_name', label: 'Advisory security' },
@@ -188,6 +227,7 @@ function Dashboard({ res, onReset }: { res: Result; onReset: () => void }) {
   ]
   const dematCols: Col[] = [
     { key: 'name', label: 'Security', render: secName },
+    ...ownerCol,
     { key: 'advisory_view', label: 'View', render: view },
     { key: 'advisory_ticker', label: 'Ticker' },
     { key: 'units', label: 'Units', numeric: true, render: units },
@@ -198,11 +238,16 @@ function Dashboard({ res, onReset }: { res: Result; onReset: () => void }) {
   ]
   const mfCols: Col[] = [
     { key: 'scheme_name', label: 'Scheme' },
+    ...ownerCol,
     { key: 'amc', label: 'AMC' },
     { key: 'units', label: 'Units', numeric: true, render: units },
-    { key: 'nav', label: 'NAV', numeric: true, render: rupee },
-    { key: 'value', label: 'Value', numeric: true, render: rupee },
+    { key: 'nav', label: 'Stmt NAV', numeric: true, render: rupee },
+    { key: 'value', label: 'Stmt value', numeric: true, render: rupee },
     { key: 'cost', label: 'Cost', numeric: true, render: rupee },
+    { key: 'latest_nav', label: 'Latest NAV', numeric: true, render: navFmt },
+    { key: 'nav_date', label: 'NAV date', render: dateFmt },
+    { key: 'change_pct', label: 'Day %', numeric: true, render: (v) => <span className={signCls(v)}>{pct(v)}</span> },
+    { key: 'current_value', label: 'Current value', numeric: true, render: (v) => rupee(v) },
     { key: 'folio_number', label: 'Folio' },
   ]
   const txCols: Col[] = res.transactions[0]
@@ -226,11 +271,34 @@ function Dashboard({ res, onReset }: { res: Result; onReset: () => void }) {
         <div>
           <h1>Portfolio overview</h1>
           <span className="chip ok"><CheckCircle2 size={14} /> Parsed {period && `· ${period}`}</span>{' '}
-          <span className="chip">{res.investor.name} · PAN {res.investor.pan}</span>
+          <span className="chip">
+            {owners && sel < 0 ? `Family · ${owners.length} members` : `${res.investor.name} · PAN ${res.investor.pan}`}
+          </span>
         </div>
         <span className="spacer" />
         <button className="btn" onClick={onReset}><RotateCcw size={15} /> New statement</button>
       </div>
+
+      {owners && (
+        <div role="tablist" aria-label="Family member"
+          style={{ display: 'flex', gap: 4, flexWrap: 'wrap', padding: 4, margin: '14px 0', width: 'fit-content', maxWidth: '100%', border: '1px solid var(--border)', borderRadius: 'var(--radius)', background: 'var(--surface)' }}>
+          {[{ label: `Family (${owners.length})`, i: -1 }, ...owners.map((o, i) => ({ label: o, i }))].map((o) => (
+            <button key={o.i} role="tab" aria-selected={sel === o.i}
+              style={{
+                padding: '7px 14px', border: 0, borderRadius: 6, cursor: 'pointer', font: 'inherit', fontSize: 13, fontWeight: 500, whiteSpace: 'nowrap',
+                background: sel === o.i ? 'var(--ink)' : 'transparent', color: sel === o.i ? 'var(--on-ink)' : 'inherit',
+              }}
+              onClick={() => onSel(o.i)}>
+              {o.label}
+            </button>
+          ))}
+        </div>
+      )}
+      {warnings?.map((w, i) => (
+        <div key={i} role="status" style={{ margin: '0 0 12px', padding: '10px 14px', borderRadius: 'var(--radius)', fontSize: 13, background: 'rgba(217,164,6,.12)', border: '1px solid rgba(217,164,6,.45)' }}>
+          <AlertCircle size={15} style={{ verticalAlign: -3, color: '#d9a406' }} /> {w}
+        </div>
+      ))}
 
       <div className="kpis">
         <Kpi label="Total portfolio value" value="" num={t.total_portfolio_value} fmt={rupee} sub={compact(t.total_portfolio_value)} />
@@ -341,7 +409,14 @@ function Dashboard({ res, onReset }: { res: Result; onReset: () => void }) {
         )}
         {tab === 'market' && <MarketTab res={res} m={m} />}
         {tab === 'demat' && <DataTable rows={res.demat} cols={dematCols} empty="No demat holdings in this statement." />}
-        {tab === 'mf' && <DataTable rows={res.mf} cols={mfCols} empty="No mutual fund holdings in this statement." />}
+        {tab === 'mf' && (
+          <>
+            <DataTable rows={withMfNav(res, m.mfNavs)} cols={mfCols} empty="No mutual fund holdings in this statement." />
+            <p className="muted" style={{ fontSize: 12, margin: '8px 0 0' }}>
+              &ldquo;Stmt&rdquo; columns are as of the statement date. Latest NAV is end-of-day from Yahoo Finance; each row shows its own NAV date.
+            </p>
+          </>
+        )}
         {tab === 'txn' && <DataTable rows={res.transactions} cols={txCols} empty="No transactions in this statement period." />}
         {tab === 'inv' && (
           <div className="row">

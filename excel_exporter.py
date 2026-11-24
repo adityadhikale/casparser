@@ -109,6 +109,13 @@ def clean_excel_value(val):
     return val
 
 
+def _with_owner(headers: list, rows: list) -> list:
+    """Prepend an 'owner' column when rows are tagged with a family member (multi-PDF export)."""
+    if any(isinstance(r, dict) and r.get("owner") for r in rows):
+        return ["owner", *headers]
+    return headers
+
+
 def parse_pincode(address: str) -> str:
     if not address:
         return ""
@@ -674,6 +681,7 @@ def write_formatted_csv(export_data: dict, output_path: Path):
             "kyc",
             "folio_pan",
         ]
+        mf_headers = _with_owner(mf_headers, export_data["mf_rows"])
         writer.writerow(mf_headers)
         for r in export_data["mf_rows"]:
             row_out = []
@@ -706,6 +714,7 @@ def write_formatted_csv(export_data: dict, output_path: Path):
             "txn_price",
             "txn_stamp_duty",
         ]
+        txn_headers = _with_owner(txn_headers, export_data["txn_rows"])
         writer.writerow(txn_headers)
         for r in export_data["txn_rows"]:
             row_out = []
@@ -733,6 +742,7 @@ def write_formatted_csv(export_data: dict, output_path: Path):
             "advisory_ticker",
             "advisory_stock_name",
         ]
+        demat_headers = _with_owner(demat_headers, export_data["demat_rows"])
         writer.writerow(demat_headers)
         for r in export_data["demat_rows"]:
             row_out = []
@@ -922,6 +932,7 @@ def write_formatted_excel(export_data: dict, output_path: Path):
         "kyc",
         "folio_pan",
     ]
+    mf_headers = _with_owner(mf_headers, export_data["mf_rows"])
     mf_data = [[r.get(h, "") for h in mf_headers] for r in export_data["mf_rows"]]
     append_section(mf_headers, mf_data, header_color="203764")
 
@@ -943,6 +954,7 @@ def write_formatted_excel(export_data: dict, output_path: Path):
         "txn_price",
         "txn_stamp_duty",
     ]
+    txn_headers = _with_owner(txn_headers, export_data["txn_rows"])
     txn_data = [[r.get(h, "") for h in txn_headers] for r in export_data["txn_rows"]]
     append_section(txn_headers, txn_data, header_color="203764")
 
@@ -961,6 +973,7 @@ def write_formatted_excel(export_data: dict, output_path: Path):
         "advisory_ticker",
         "advisory_stock_name",
     ]
+    demat_headers = _with_owner(demat_headers, export_data["demat_rows"])
     demat_data = [[r.get(h, "") for h in demat_headers] for r in export_data["demat_rows"]]
     append_section(demat_headers, demat_data, header_color="1F497D")
     append_section(["Field", "Value"], export_data["metadata_table"][1:], header_color="595959")
@@ -1101,7 +1114,7 @@ def write_formatted_excel(export_data: dict, output_path: Path):
             for v in r:
                 v = clean_excel_value(v)
                 try:
-                    if isinstance(val, str) and v and re.match(r"^-?\d+(\.\d+)?$", v):
+                    if isinstance(v, str) and v and re.match(r"^-?\d+(\.\d+)?$", v):
                         v = float(v) if "." in v else int(v)
                 except ValueError:
                     pass

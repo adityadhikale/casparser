@@ -5,6 +5,7 @@ Used by the FastAPI app (api/main.py). Holds no Streamlit dependency.
 
 from __future__ import annotations
 
+import hashlib
 import json
 import os
 import tempfile
@@ -12,6 +13,7 @@ from pathlib import Path
 
 import casparser
 from advisory import DEFAULT_ADVISORY_PATH, AdvisoryEngine
+from consolidate import merge_family
 from excel_exporter import (
     build_enriched_json,
     build_export_data,
@@ -83,7 +85,25 @@ def _num(v):
     return v
 
 
-def parse_cas(pdf_bytes: bytes, password: str, engine: AdvisoryEngine | None) -> dict:
+def _tag_advisory(rows: list[dict], advisory_data: dict) -> None:
+    """Write advisory view/ticker/name onto demat rows, matched by ISIN."""
+    eval_map = {h.get("isin", "").upper(): h for h in advisory_data.get("holdings", [])}
+    for row in rows:
+        m = eval_map.get(row.get("isin", "").upper())
+        row["advisory_view"] = (m or {}).get("advisory_view", "Not Covered")
+        row["advisory_ticker"] = (m or {}).get("advisory_ticker", "N/A")
+        row["advisory_stock_name"] = (m or {}).get("advisory_stock_name", "N/A")
+
+
+def _apply_advisory(export_data: dict, engine: AdvisoryEngine | None) -> None:
+    if engine:
+        advisory_data = engine.evaluate_holdings(export_data["demat_rows"])
+        export_data["advisory_data"] = advisory_data
+        _tag_advisory(export_data["demat_rows"], advisory_data)
+
+
+def _read_member(pdf_bytes: bytes, password: str, engine: AdvisoryEngine | None):
+    """Parse one PDF into (parsed, export_data) with advisory applied."""
     fd, name = tempfile.mkstemp(suffix=".pdf")
     pdf_path = Path(name)
     try:
@@ -102,51 +122,114 @@ def parse_cas(pdf_bytes: bytes, password: str, engine: AdvisoryEngine | None) ->
             raise ParseError(f"Could not parse statement: {exc}") from exc
 
         export_data = build_export_data(parsed, pdf_path=pdf_path)
-
-        if engine:
-            advisory_data = engine.evaluate_holdings(export_data["demat_rows"])
-            export_data["advisory_data"] = advisory_data
-            eval_map = {h.get("isin", "").upper(): h for h in advisory_data.get("holdings", [])}
-            for row in export_data["demat_rows"]:
-                m = eval_map.get(row.get("isin", "").upper())
-                row["advisory_view"] = (m or {}).get("advisory_view", "Not Covered")
-                row["advisory_ticker"] = (m or {}).get("advisory_ticker", "N/A")
-                row["advisory_stock_name"] = (m or {}).get("advisory_stock_name", "N/A")
-
-        enriched = build_enriched_json(parsed, export_data)
-        xlsx = _file_bytes(write_formatted_excel, export_data, ".xlsx")
-        csv = _file_bytes(write_formatted_csv, export_data, ".csv")
-
-        investor_table = export_data.get("investor_table", [])
-        payload = {
-            "statement_period": parsed.get("statement_period") or {},
-            "investor": {
-                "name": (parsed.get("investor_info") or {}).get("name", "N/A"),
-                "pan": _investor_pan(investor_table),
-                "details": investor_table[1:],
-            },
-            "totals": export_data["totals"],
-            "demat": export_data["demat_rows"],
-            "mf": export_data["mf_rows"],
-            "transactions": export_data["txn_rows"],
-            "categories": export_data["category_table"][1:],
-            "advisory": export_data.get("advisory_data") or {"holdings": [], "summary": {}},
-            "enriched_json": enriched,
-        }
-        # make strictly JSON-safe (dates, Decimals), then give amounts real numbers
-        safe = json.loads(json.dumps(payload, default=str))
-        for key in ("totals",):
-            safe[key] = {k: _num(v) for k, v in safe[key].items()}
-        for key in ("demat", "mf", "transactions"):
-            for row in safe[key]:
-                for f in _NUMERIC_FIELDS & row.keys():
-                    row[f] = _num(row[f])
-        for h in safe["advisory"].get("holdings", []):
-            for f in _NUMERIC_FIELDS & h.keys():
-                h[f] = _num(h[f])
-        for v in safe["advisory"].get("summary", {}).values():
-            v["value"] = _num(v.get("value"))
-        safe["categories"] = [[c, _num(v), n] for c, v, n in safe["categories"]]
-        return safe, xlsx, csv
+        _apply_advisory(export_data, engine)
+        return parsed, export_data
     finally:
         pdf_path.unlink(missing_ok=True)
+
+
+def _build_outputs(
+    parsed: dict,
+    export_data: dict,
+    file_export: dict | None = None,
+    enriched_extra: dict | None = None,
+):
+    """Build (payload, xlsx_bytes, csv_bytes).
+
+    ``file_export`` is the data the xlsx/csv are written from when it differs from the
+    on-screen ``export_data`` (family view: every member's own rows with an Owner column).
+    """
+    enriched = build_enriched_json(parsed, export_data)
+    if enriched_extra:
+        enriched.update(enriched_extra)
+    source = file_export or export_data
+    xlsx = _file_bytes(write_formatted_excel, source, ".xlsx")
+    csv = _file_bytes(write_formatted_csv, source, ".csv")
+
+    investor_table = export_data.get("investor_table", [])
+    payload = {
+        "statement_period": parsed.get("statement_period") or {},
+        "investor": {
+            "name": (parsed.get("investor_info") or {}).get("name", "N/A"),
+            "pan": _investor_pan(investor_table),
+            "details": investor_table[1:],
+        },
+        "totals": export_data["totals"],
+        "demat": export_data["demat_rows"],
+        "mf": export_data["mf_rows"],
+        "transactions": export_data["txn_rows"],
+        "categories": export_data["category_table"][1:],
+        "advisory": export_data.get("advisory_data") or {"holdings": [], "summary": {}},
+        "enriched_json": enriched,
+    }
+    # make strictly JSON-safe (dates, Decimals), then give amounts real numbers
+    safe = json.loads(json.dumps(payload, default=str))
+    for key in ("totals",):
+        safe[key] = {k: _num(v) for k, v in safe[key].items()}
+    for key in ("demat", "mf", "transactions"):
+        for row in safe[key]:
+            for f in _NUMERIC_FIELDS & row.keys():
+                row[f] = _num(row[f])
+    for h in safe["advisory"].get("holdings", []):
+        for f in _NUMERIC_FIELDS & h.keys():
+            h[f] = _num(h[f])
+    for v in safe["advisory"].get("summary", {}).values():
+        v["value"] = _num(v.get("value"))
+    safe["categories"] = [[c, _num(v), n] for c, v, n in safe["categories"]]
+    return safe, xlsx, csv
+
+
+def parse_cas(pdf_bytes: bytes, password: str, engine: AdvisoryEngine | None):
+    parsed, export_data = _read_member(pdf_bytes, password, engine)
+    return _build_outputs(parsed, export_data)
+
+
+def parse_family(files: list[tuple[str, bytes, str]], engine: AdvisoryEngine | None) -> dict:
+    """Parse several statements (``(filename, bytes, password)``) and consolidate them.
+
+    Returns ``{"family": (payload, xlsx, csv), "members": [(stem, payload, xlsx, csv)],
+    "warnings": [...]}``. Raises ParseError naming the offending file.
+    """
+    members: list[dict] = []
+    seen_hashes: dict[str, str] = {}
+    for filename, data, password in files:
+        digest = hashlib.sha256(data).hexdigest()
+        if digest in seen_hashes:
+            raise ParseError(
+                f"{filename} is identical to {seen_hashes[digest]}. Remove the duplicate."
+            )
+        seen_hashes[digest] = filename
+        try:
+            parsed, export_data = _read_member(data, password, engine)
+        except ParseError as exc:
+            raise ParseError(f"{filename}: {exc}") from exc
+        stem = Path(filename).stem or "CAS_Report"
+        name = (parsed.get("investor_info") or {}).get("name") or stem
+        members.append(
+            {
+                "owner": name,
+                "pan": _investor_pan(export_data.get("investor_table", [])),
+                "filename": stem,
+                "parsed": parsed,
+                "export_data": export_data,
+            }
+        )
+
+    member_outputs = []
+    for m in members:
+        payload, xlsx, csv = _build_outputs(m["parsed"], m["export_data"])
+        member_outputs.append((m["filename"], payload, xlsx, csv))
+
+    merged = merge_family(members)
+    _apply_advisory(merged["export_data"], engine)
+    if engine:
+        advisory_data = merged["export_data"]["advisory_data"]
+        merged["file_export"]["advisory_data"] = advisory_data
+        _tag_advisory(merged["file_export"]["demat_rows"], advisory_data)
+    family = _build_outputs(
+        merged["parsed"],
+        merged["export_data"],
+        file_export=merged["file_export"],
+        enriched_extra={"members": [o[1]["enriched_json"] for o in member_outputs]},
+    )
+    return {"family": family, "members": member_outputs, "warnings": merged["warnings"]}

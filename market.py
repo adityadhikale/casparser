@@ -110,6 +110,65 @@ def holdings_quotes(holdings: list[dict]) -> list[dict]:
         return list(ex.map(one, holdings))
 
 
+_mf_symbol_cache: dict[str, str | None] = {}
+
+
+def resolve_mf_symbol(isin: str) -> str | None:
+    """Map a mutual fund ISIN to its Yahoo symbol (Morningstar-style, e.g. 0P0000XVTL.BO)."""
+    if isin in _mf_symbol_cache:
+        return _mf_symbol_cache[isin]
+    sym = None
+    try:
+        quotes = yf.Search(isin, max_results=6).quotes
+        sym = next((q.get("symbol") for q in quotes if q.get("quoteType") == "MUTUALFUND"), None)
+    except Exception:
+        sym = None
+    if sym is not None:  # don't cache failures: Yahoo may just have been unreachable
+        _mf_symbol_cache[isin] = sym
+    return sym
+
+
+def _mf_nav(isin: str) -> dict:
+    """Latest and previous end-of-day NAV for one fund, with the NAV's own date."""
+
+    def load():
+        out = {"isin": isin, "symbol": None, "nav": None}
+        sym = resolve_mf_symbol(isin)
+        if not sym:
+            return out
+        out["symbol"] = sym
+        try:
+            closes = yf.Ticker(sym).history(period="10d")["Close"].dropna()
+        except Exception:
+            return out
+        if closes.empty:
+            return out
+        nav = _f(closes.iloc[-1])
+        prev = _f(closes.iloc[-2]) if len(closes) > 1 else None
+        out.update(
+            nav=nav,
+            prev_nav=prev,
+            nav_date=closes.index[-1].date().isoformat(),
+            change=(nav - prev) if nav is not None and prev else None,
+            change_pct=((nav / prev - 1) * 100) if nav is not None and prev else None,
+        )
+        return out
+
+    # NAVs change once a day, so cache for an hour (misses are retried sooner)
+    res = _cached(f"mf:{isin}", 3600, load)
+    if res.get("nav") is None:
+        with _lock:
+            _cache.pop(f"mf:{isin}", None)
+    return res
+
+
+def mf_navs(isins: list[str]) -> list[dict]:
+    """Latest NAV per unique ISIN, in request order. End-of-day data, not intraday."""
+    unique = list(dict.fromkeys(i.strip().upper() for i in isins if i and i.strip()))
+    with ThreadPoolExecutor(max_workers=8) as ex:
+        return list(ex.map(_mf_nav, unique))
+
+
 def overview() -> list[dict]:
     def load():
         syms = [s for s, _ in INDICES]
