@@ -51,13 +51,14 @@ casparser/
 │   ├── analysis/           # Capital gains and portfolio analytics
 │   └── cli.py              # Command-line interface
 ├── api/                    # FastAPI backend (web application)
-│   └── main.py             # API routes: /api/parse, /api/market/*, /api/advisory/status
+│   └── main.py             # API routes: /api/parse, /api/parse-multi, /api/market/*, /api/advisory/status
 ├── web/                    # Vite + React + TypeScript frontend
 │   ├── src/                # React components, hooks, and styles
 │   └── dist/               # Production build output (served by FastAPI)
 ├── data/                   # Equity Portfolio Advisory.xlsx (advisory model)
 ├── service.py              # PDF parse service (UI-agnostic, used by API)
-├── market.py               # Yahoo Finance market data layer (cached)
+├── consolidate.py          # Merges several members' statements into one family view
+├── market.py               # Yahoo Finance market data layer (stocks, indices, mutual fund NAVs)
 ├── excel_exporter.py       # Multi-tab Excel and formatted CSV builder
 ├── run_parser.py           # CLI batch / single-file runner
 ├── run_web.bat             # Windows one-click launcher for the web app
@@ -74,8 +75,10 @@ A modern full-stack web dashboard that parses CAS statements in real-time, cross
 
 ### Features
 - **Instant Client-Side Parsing**: Upload CAS PDFs (CDSL, NSDL, CAMS, KFintech) with optional password support. Nothing from the statement is permanently saved on the server.
+- **Family Consolidation**: Upload up to 10 CAS PDFs at once (one per family member, each with its own password) to get one consolidated portfolio. Holdings with the same ISIN are merged into one line, and an Owner column plus a Family / member selector lets you switch between the combined view and each person. Combined Excel/CSV/JSON exports carry an Owner column. The app warns when statements cover different periods or share a PAN, and rejects identical files. A single PDF works exactly as before.
 - **Equity Advisory Matching**: Instant BUY, ADD, HOLD, TRIM, SELL, and Not Covered badge matching by ISIN, ticker, and company name.
 - **Live Market Feed**: Real-time indicative market strip (Nifty 50, Sensex, Bank Nifty, India VIX, USD/INR, Gold, Brent) with 1-month sparklines, today's P&L, day change %, and 52-week ranges via Yahoo Finance.
+- **Mutual Fund NAVs**: Latest end-of-day NAV, NAV date, day change and current value for each fund, matched by ISIN on Yahoo Finance. Shown in the Live market tab and as extra columns in the Mutual funds tab. Funds do not trade intraday, so these are daily NAVs, not live prices; each row shows its own NAV date.
 - **Interactive Visualizations**: Asset allocation donut chart, advisory distribution bar chart, top holdings chart, and full export capabilities (formatted multi-tab Excel, CSV, JSON).
 
 ### Running Locally
