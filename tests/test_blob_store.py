@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import re
 from concurrent.futures import Future
+from types import SimpleNamespace
 
 import pytest
 
@@ -35,6 +36,10 @@ def configured(monkeypatch):
     monkeypatch.setattr(blob_store, "_executor", _SyncExecutor())
     fake = _FakeContainer()
     monkeypatch.setattr(blob_store, "_get_container", lambda: fake)
+    # Keep the tests independent of the azure SDK (CI installs only the parser).
+    monkeypatch.setattr(
+        blob_store, "_content_settings", lambda: SimpleNamespace(content_type="application/pdf")
+    )
     return fake
 
 

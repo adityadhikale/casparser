@@ -73,15 +73,19 @@ def _get_container():
         return _container
 
 
+def _content_settings():
+    from azure.storage.blob import ContentSettings
+
+    return ContentSettings(content_type="application/pdf")
+
+
 def _upload(path: str, data: bytes, original: str, kind: str) -> None:
     try:
-        from azure.storage.blob import ContentSettings
-
         _get_container().upload_blob(
             name=path,
             data=data,
             overwrite=False,
-            content_settings=ContentSettings(content_type="application/pdf"),
+            content_settings=_content_settings(),
             metadata={"kind": kind, "original_name": _ascii(original)},
         )
         log.info("Archived %s (%d bytes)", path, len(data))
