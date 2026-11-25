@@ -26,7 +26,7 @@ RUN pip install --no-cache-dir -r requirements.txt
 COPY casparser/ ./casparser/
 COPY api/ ./api/
 COPY data/ ./data/
-COPY service.py market.py excel_exporter.py advisory.py consolidate.py ./
+COPY service.py market.py excel_exporter.py advisory.py consolidate.py blob_store.py ./
 
 # Copy built frontend from Stage 1
 COPY --from=frontend-builder /app/web/dist ./web/dist

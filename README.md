@@ -123,6 +123,19 @@ docker run -p 8000:8000 crest-casparser
 ```
 Access the application at `http://localhost:8000`.
 
+### Azure Blob archive (optional)
+
+Set both variables to keep a copy of every uploaded CAS PDF in Azure Blob Storage:
+
+```bash
+docker run -p 8000:8000   -e AZURE_STORAGE_CONNECTION_STRING="<connection string>"   -e AZURE_BLOB_CONTAINER="<container name>"   crest-casparser
+```
+
+- PDFs are stored as uploaded at `parsed/YYYY/MM/DD/HHMMSS_<id>/<file>.pdf`, or under `failed/...` when parsing fails. A family upload shares one folder.
+- Passwords, advisory workbooks and generated reports are never stored.
+- Uploads run in the background. If Azure is unreachable, parsing still works and the error is logged.
+- Without the variables (e.g. on Render) nothing is uploaded. Never commit the connection string.
+
 ---
 
 ## Quickstart
